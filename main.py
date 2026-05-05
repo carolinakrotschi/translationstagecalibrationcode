@@ -132,7 +132,7 @@ class InterferometerApp(ctk.CTk):  # Main application class
 
             while self.is_monitoring:
                 intensity = self.camera_handler.get_fringe_intensity()
-                print(f"Current intensity: {intensity}")  # Debug: print current intensity
+                print(f"Current intensity: {intensity}")  # Debug: print current intensitz
             
                 if intensity is not None:
                     intensity_history.append(intensity)
