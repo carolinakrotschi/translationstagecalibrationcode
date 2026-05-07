@@ -1,3 +1,5 @@
+
+
 import numpy as np
 import time
 from scipy.signal import find_peaks
@@ -13,11 +15,11 @@ class CameraHandler:
         # ROI hier einstellen
         self.roi_x = 754
         self.roi_y = 464
-        self.roi_w = 118
-        self.roi_h = 149
+        self.roi_w = 40
+        self.roi_h = 40
 
         # Camera Settings hier einstellen
-        self.exposure_us = 193
+        self.exposure_us = 193 #in mykrometer
         self.gain = 5
         self.black_level = 0
 

@@ -207,7 +207,7 @@ class InterferometerApp(ctk.CTk):
             if img is not None:
                 frame_counter += 1
 
-                if frame_counter % 3 == 0:
+                if frame_counter % 20 == 0: #nur jedes 20. bild angezeigt
                     self.after(0, lambda f=img: self.update_image(f))
 
                 intensity = self.camera_handler.get_fringe_intensity_from_frame(img)
@@ -241,7 +241,7 @@ class InterferometerApp(ctk.CTk):
                     )
                 )
 
-            time.sleep(0.06)
+            #time.sleep(0.06)
 
     def update_accumulated_fringes(self, intensity):
         self.intensity_history.append(intensity)
@@ -270,7 +270,8 @@ class InterferometerApp(ctk.CTk):
             return False
 
         if self.was_dark and intensity > bright_threshold:
-            if now - self.last_count_time > 0.18:
+            #damit man intensitätsbedingte Mehrfachzählungen wertet, aber ich will trotzdem die exposure nicht zu hoch
+            if now - self.last_count_time > 0.001:
                 self.accumulated_fringes += 1
                 self.was_dark = False
                 self.last_count_time = now
