@@ -44,33 +44,6 @@ class CameraHandler:
 
             self.camera = self.sdk.open_camera(cameras[0])
 
-            # -------------------------------------------------
-            # HARDWARE ROI
-            # -------------------------------------------------
-
-            try:
-                roi_x1 = int(self.roi_x)
-                roi_y1 = int(self.roi_y)
-
-                roi_x2 = int(self.roi_x + self.roi_w)
-                roi_y2 = int(self.roi_y + self.roi_h)
-
-                self.camera.roi = (
-                    roi_x1,
-                    roi_y1,
-                    roi_x2,
-                    roi_y2
-                )
-
-                print(
-                    f"Hardware ROI set: "
-                    f"x={roi_x1}, y={roi_y1}, "
-                    f"w={self.roi_w}, h={self.roi_h}"
-                )
-
-            except Exception as e:
-                print("Could not set hardware ROI:", e)
-
             try:
                 self.camera.exposure_time_us = self.exposure_us
             except Exception as e:
@@ -92,6 +65,7 @@ class CameraHandler:
                 print("Could not set continuous mode:", e)
 
             self.camera.arm(2)
+            self.camera.issue_software_trigger()
 
             self.is_connected = True
             print("Camera connected.")
@@ -126,6 +100,8 @@ class CameraHandler:
             return None
 
         try:
+            self.camera.issue_software_trigger()
+
             for _ in range(20):
                 frame = self.camera.get_pending_frame_or_null()
 

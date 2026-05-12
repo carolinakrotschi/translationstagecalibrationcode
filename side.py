@@ -1,26 +1,23 @@
-# Version: Robuste Fringe-Erkennung mit nur zählen wenn nach valley ein berg kommt
+# =========================================================
+# INTERFEROMETER OSCILLOSCOPE MONITOR
+#
+# Fringe Detection über Photodiode + Oszilloskop
+#
+# Statt Kamera:
+# - direkte Spannungsmessung
+# - extrem hohe Samplingrate
+# - viel robuster
+#
+# Benötigt:
+# pip install pyvisa pyvisa-py numpy customtkinter
+#
+# =========================================================
 
-import os
 import threading
 import time
 import numpy as np
 import customtkinter as ctk
-
-from PIL import Image, ImageDraw
-
-from camera_handler import CameraHandler
-
-
-# =========================================================
-# DLL / CAMERA
-# =========================================================
-
-current_directory = os.path.dirname(os.path.abspath(__file__))
-dll_path = os.path.join(current_directory, "Camera")
-
-if os.path.exists(dll_path):
-    os.add_dll_directory(dll_path)
-    print(f"Drivers loaded: {dll_path}")
+import pyvisa
 
 
 # =========================================================
@@ -28,7 +25,12 @@ if os.path.exists(dll_path):
 # =========================================================
 
 LASER_WAVELENGTH_NM = 632.8
-FRINGE_DISTANCE_MM = (LASER_WAVELENGTH_NM / 2) / 1_000_000
+
+FRINGE_DISTANCE_MM = (
+    (LASER_WAVELENGTH_NM / 2)
+    / 1_000_000
+)
+
 SPEED_OF_LIGHT_MM_PS = 0.299792458
 
 
@@ -37,8 +39,139 @@ SPEED_OF_LIGHT_MM_PS = 0.299792458
 # =========================================================
 
 TEXT_COLOR = "#0A4A51"
+
 GREEN_COLOR = "#1EAD4F"
+
 RED_COLOR = "#C0392B"
+
+
+# =========================================================
+# OSCILLOSCOPE HANDLER
+# =========================================================
+
+class OscilloscopeHandler:
+
+    def __init__(self):
+
+        self.scope = None
+
+        self.connected = False
+
+        self.simulation_mode = False
+
+        # ---------------------------------------------
+        # VISA
+        # ---------------------------------------------
+
+        try:
+
+            self.rm = pyvisa.ResourceManager()
+
+            resources = self.rm.list_resources()
+
+            print("Available VISA devices:")
+
+            for r in resources:
+                print(r)
+
+            if len(resources) == 0:
+
+                raise Exception("No oscilloscope found")
+
+            # Erstes Gerät öffnen
+            self.scope = self.rm.open_resource(resources[0])
+
+            self.scope.timeout = 2000
+
+            self.connected = True
+
+            print("Oscilloscope connected")
+
+        except Exception as e:
+
+            print("Oscilloscope error:", e)
+
+            print("Using simulation mode")
+
+            self.simulation_mode = True
+
+            self.connected = True
+
+        # ---------------------------------------------
+        # SIMULATION
+        # ---------------------------------------------
+
+        self.sim_phase = 0
+
+    # =====================================================
+    # READ SIGNAL
+    # =====================================================
+
+    def get_signal_value(self):
+
+        # -------------------------------------------------
+        # SIMULATION MODE
+        # -------------------------------------------------
+
+        if self.simulation_mode:
+
+            self.sim_phase += 0.25
+
+            signal = (
+                500
+                + 220 * np.sin(self.sim_phase)
+                + np.random.normal(0, 15)
+            )
+
+            return float(signal)
+
+        # -------------------------------------------------
+        # REAL OSCILLOSCOPE
+        # -------------------------------------------------
+
+        try:
+
+            # Beispiel:
+            # viele Scopes unterstützen:
+            #
+            # MEASure:VAVerage?
+            #
+            # oder:
+            #
+            # MEASure:VMAX?
+            #
+            # oder:
+            #
+            # CURVe?
+            #
+            # Das hängt vom Scope ab.
+
+            value = self.scope.query(
+                "MEASure:VAVerage?"
+            )
+
+            return float(value)
+
+        except Exception as e:
+
+            print("Read error:", e)
+
+            return None
+
+    # =====================================================
+    # CLOSE
+    # =====================================================
+
+    def close(self):
+
+        try:
+
+            if self.scope is not None:
+                self.scope.close()
+
+        except Exception as e:
+
+            print("Scope close error:", e)
 
 
 # =========================================================
@@ -48,6 +181,7 @@ RED_COLOR = "#C0392B"
 class InterferometerApp(ctk.CTk):
 
     def __init__(self):
+
         super().__init__()
 
         # -------------------------------------------------
@@ -56,38 +190,43 @@ class InterferometerApp(ctk.CTk):
 
         self.is_monitoring = False
 
-        self.intensity_history = []
+        self.signal_history = []
+
         self.history_size = 9
 
         self.accumulated_fringes = 0
 
-        # Peak detector state machine
+        # -------------------------------------------------
+        # PEAK DETECTOR
+        # -------------------------------------------------
+
         self.state = "SEARCH_VALLEY"
 
         self.last_valley = None
+
         self.last_peak = None
 
         self.last_count_time = 0
 
-        # Minimum real fringe amplitude
-        self.min_amplitude = 35
+        self.min_amplitude = 25
 
-        # Cooldown against double counting
-        self.cooldown = 0.08
+        self.cooldown = 0.001
 
         # -------------------------------------------------
-        # CAMERA
+        # OSCILLOSCOPE
         # -------------------------------------------------
 
-        self.camera_handler = CameraHandler()
-        self.camera_connected = self.camera_handler.connect()
+        self.scope_handler = OscilloscopeHandler()
+
+        self.scope_connected = self.scope_handler.connected
 
         # -------------------------------------------------
         # WINDOW
         # -------------------------------------------------
 
-        self.title("Interferometer Monitor")
-        self.geometry("760x1050")
+        self.title("Interferometer Oscilloscope Monitor")
+
+        self.geometry("700x700")
 
         ctk.set_appearance_mode("light")
 
@@ -99,7 +238,7 @@ class InterferometerApp(ctk.CTk):
 
         ctk.CTkLabel(
             self,
-            text="Interferometer Monitor",
+            text="Interferometer Oscilloscope Monitor",
             font=("Arial", 26, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=20)
@@ -113,7 +252,7 @@ class InterferometerApp(ctk.CTk):
             text="START MONITORING",
             command=self.toggle,
             height=45,
-            width=230,
+            width=240,
             font=("Arial", 16, "bold"),
             fg_color=TEXT_COLOR
         )
@@ -126,10 +265,10 @@ class InterferometerApp(ctk.CTk):
 
         self.restart_btn = ctk.CTkButton(
             self,
-            text="RESTART / RESET",
+            text="RESET",
             command=self.restart,
             height=40,
-            width=210,
+            width=220,
             font=("Arial", 14, "bold"),
             fg_color="#D35400"
         )
@@ -147,7 +286,7 @@ class InterferometerApp(ctk.CTk):
             text_color=TEXT_COLOR
         )
 
-        self.status.pack(pady=5)
+        self.status.pack(pady=10)
 
         # -------------------------------------------------
         # INFO FRAME
@@ -165,7 +304,33 @@ class InterferometerApp(ctk.CTk):
         )
 
         # -------------------------------------------------
-        # DISTANCE MM
+        # SIGNAL
+        # -------------------------------------------------
+
+        self.label_signal = ctk.CTkLabel(
+            self.frame,
+            text="Signal: 0.00",
+            font=("Arial", 18, "bold"),
+            text_color=TEXT_COLOR
+        )
+
+        self.label_signal.pack(pady=10)
+
+        # -------------------------------------------------
+        # FRINGES
+        # -------------------------------------------------
+
+        self.label_fringes = ctk.CTkLabel(
+            self.frame,
+            text="Fringes: 0",
+            font=("Arial", 20, "bold"),
+            text_color=TEXT_COLOR
+        )
+
+        self.label_fringes.pack(pady=10)
+
+        # -------------------------------------------------
+        # DISTANCE
         # -------------------------------------------------
 
         self.label_mm = ctk.CTkLabel(
@@ -176,19 +341,6 @@ class InterferometerApp(ctk.CTk):
         )
 
         self.label_mm.pack(pady=5)
-
-        # -------------------------------------------------
-        # DISTANCE UM
-        # -------------------------------------------------
-
-        self.label_um = ctk.CTkLabel(
-            self.frame,
-            text="Distance: 0.000 µm",
-            font=("Arial", 18, "bold"),
-            text_color=TEXT_COLOR
-        )
-
-        self.label_um.pack(pady=5)
 
         # -------------------------------------------------
         # TIME DELAY
@@ -203,76 +355,6 @@ class InterferometerApp(ctk.CTk):
 
         self.label_ps.pack(pady=5)
 
-        # -------------------------------------------------
-        # INTENSITY
-        # -------------------------------------------------
-
-        self.label_intensity = ctk.CTkLabel(
-            self.frame,
-            text="Intensity: 0.00",
-            font=("Arial", 16),
-            text_color=TEXT_COLOR
-        )
-
-        self.label_intensity.pack(pady=5)
-
-        # -------------------------------------------------
-        # FRINGE COUNT
-        # -------------------------------------------------
-
-        self.label_accumulated_fringes = ctk.CTkLabel(
-            self.frame,
-            text="Accumulated Fringes Count: 0",
-            font=("Arial", 18, "bold"),
-            text_color=TEXT_COLOR
-        )
-
-        self.label_accumulated_fringes.pack(pady=10)
-
-        # -------------------------------------------------
-        # LIVE IMAGE
-        # -------------------------------------------------
-
-        self.live_size = (620, 460)
-
-        ctk.CTkLabel(
-            self,
-            text="Live Camera Frame",
-            font=("Arial", 18, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(20, 8))
-
-        self.image_label = ctk.CTkLabel(
-            self,
-            text="No Image",
-            width=self.live_size[0],
-            height=self.live_size[1],
-            fg_color="#111111",
-            text_color="white"
-        )
-
-        self.image_label.pack(pady=10)
-
-        # -------------------------------------------------
-        # LOGO
-        # -------------------------------------------------
-
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        logo_path = os.path.join(script_dir, "assets", "logo.png")
-
-        if os.path.exists(logo_path):
-
-            self.logo_image = ctk.CTkImage(
-                light_image=Image.open(logo_path),
-                size=(300, 81)
-            )
-
-            ctk.CTkLabel(
-                self,
-                image=self.logo_image,
-                text=""
-            ).pack(pady=25)
-
     # =====================================================
     # START / STOP
     # =====================================================
@@ -281,26 +363,26 @@ class InterferometerApp(ctk.CTk):
 
         if not self.is_monitoring:
 
-            if not self.camera_connected:
+            if not self.scope_connected:
 
                 self.status.configure(
-                    text="Error: Camera not connected",
+                    text="Scope not connected",
                     text_color="red"
                 )
 
                 return
 
-            self.restart_values_only()
+            self.restart_values()
 
             self.is_monitoring = True
 
             self.btn.configure(
-                text="STOP MONITORING",
+                text="STOP",
                 fg_color=RED_COLOR
             )
 
             self.status.configure(
-                text="Status: Running",
+                text="Running",
                 text_color="green"
             )
 
@@ -319,7 +401,7 @@ class InterferometerApp(ctk.CTk):
             )
 
             self.status.configure(
-                text="Status: Stopped",
+                text="Stopped",
                 text_color=TEXT_COLOR
             )
 
@@ -329,50 +411,25 @@ class InterferometerApp(ctk.CTk):
 
     def restart(self):
 
-        self.restart_values_only()
-
-        self.status.configure(
-            text="Status: Reset to 0",
-            text_color="#D35400"
-        )
+        self.restart_values()
 
     # =====================================================
     # RESET VALUES
     # =====================================================
 
-    def restart_values_only(self):
+    def restart_values(self):
 
-        self.intensity_history = []
+        self.signal_history = []
 
         self.accumulated_fringes = 0
 
         self.state = "SEARCH_VALLEY"
 
         self.last_valley = None
+
         self.last_peak = None
 
         self.last_count_time = 0
-
-        self.label_mm.configure(
-            text="Distance: 0.000000 mm"
-        )
-
-        self.label_um.configure(
-            text="Distance: 0.000 µm"
-        )
-
-        self.label_ps.configure(
-            text="Time Delay: 0.0000 ps"
-        )
-
-        self.label_intensity.configure(
-            text="Intensity: 0.00",
-            text_color=TEXT_COLOR
-        )
-
-        self.label_accumulated_fringes.configure(
-            text="Accumulated Fringes Count: 0"
-        )
 
     # =====================================================
     # MAIN LOOP
@@ -380,91 +437,84 @@ class InterferometerApp(ctk.CTk):
 
     def loop(self):
 
-        frame_counter = 0
-
         while self.is_monitoring:
 
-            img = self.camera_handler.get_frame()
+            signal = self.scope_handler.get_signal_value()
 
-            if img is None:
+            if signal is None:
                 continue
 
-            frame_counter += 1
-
-            # -------------------------------------------------
-            # IMAGE UPDATE
-            # -------------------------------------------------
-
-            if frame_counter % 20 == 0:
-
-                self.after(
-                    0,
-                    lambda f=img: self.update_image(f)
-                )
-
-            # -------------------------------------------------
-            # INTENSITY
-            # -------------------------------------------------
-
-            intensity = self.camera_handler.get_fringe_intensity_from_frame(img)
-
-            if intensity is not None:
-
-                fringe_counted = self.update_accumulated_fringes(intensity)
-
-                self.after(
-                    0,
-                    lambda v=intensity, counted=fringe_counted:
-                    self.update_intensity_label(v, counted)
-                )
+            fringe_counted = self.update_fringes(signal)
 
             # -------------------------------------------------
             # PHYSICS
             # -------------------------------------------------
 
-            dist_mm = self.accumulated_fringes * FRINGE_DISTANCE_MM
+            dist_mm = (
+                self.accumulated_fringes
+                * FRINGE_DISTANCE_MM
+            )
 
-            dist_um = dist_mm * 1000
+            time_ps = (
+                2 * dist_mm
+            ) / SPEED_OF_LIGHT_MM_PS
 
-            time_ps = (2 * dist_mm) / SPEED_OF_LIGHT_MM_PS
+            # -------------------------------------------------
+            # GUI
+            # -------------------------------------------------
 
             self.after(
                 0,
-                lambda d=dist_mm, u=dist_um, p=time_ps:
-                self.update_values(d, u, p)
+                lambda s=signal, c=fringe_counted:
+                self.update_signal_label(s, c)
             )
 
             self.after(
                 0,
-                lambda v=self.accumulated_fringes:
-                self.label_accumulated_fringes.configure(
-                    text=f"Accumulated Fringes Count: {v}"
+                lambda f=self.accumulated_fringes:
+                self.label_fringes.configure(
+                    text=f"Fringes: {f}"
+                )
+            )
+
+            self.after(
+                0,
+                lambda d=dist_mm:
+                self.label_mm.configure(
+                    text=f"Distance: {d:.6f} mm"
+                )
+            )
+
+            self.after(
+                0,
+                lambda p=time_ps:
+                self.label_ps.configure(
+                    text=f"Time Delay: {p:.4f} ps"
                 )
             )
 
     # =====================================================
-    # ROBUST FRINGE DETECTION
+    # PEAK DETECTOR
     # =====================================================
 
-    def update_accumulated_fringes(self, intensity):
+    def update_fringes(self, value):
 
         # -------------------------------------------------
         # HISTORY
         # -------------------------------------------------
 
-        self.intensity_history.append(intensity)
+        self.signal_history.append(value)
 
-        if len(self.intensity_history) > self.history_size:
-            self.intensity_history.pop(0)
+        if len(self.signal_history) > self.history_size:
+            self.signal_history.pop(0)
 
-        # Noch nicht genug Daten
-        if len(self.intensity_history) < 7:
+        if len(self.signal_history) < 7:
             return False
 
-        signal = np.array(self.intensity_history)
+        signal = np.array(self.signal_history)
 
         # -------------------------------------------------
-        # ROBUST SMOOTHING
+        # MEDIAN SMOOTHING
         # -------------------------------------------------
 
         smooth_signal = []
@@ -477,16 +527,17 @@ class InterferometerApp(ctk.CTk):
 
         smooth_signal = np.array(smooth_signal)
 
-        # Mindestens 3 Punkte nötig
         if len(smooth_signal) < 3:
             return False
 
         # -------------------------------------------------
-        # LETZTE 3 PUNKTE
+        # LAST 3 POINTS
         # -------------------------------------------------
 
         a = smooth_signal[-3]
+
         b = smooth_signal[-2]
+
         c = smooth_signal[-1]
 
         current_time = time.time()
@@ -496,7 +547,7 @@ class InterferometerApp(ctk.CTk):
         ) > self.cooldown
 
         # -------------------------------------------------
-        # LOKALES MINIMUM (VALLEY)
+        # VALLEY
         # -------------------------------------------------
 
         is_valley = (
@@ -505,7 +556,7 @@ class InterferometerApp(ctk.CTk):
         )
 
         # -------------------------------------------------
-        # LOKALES MAXIMUM (PEAK)
+        # PEAK
         # -------------------------------------------------
 
         is_peak = (
@@ -514,7 +565,7 @@ class InterferometerApp(ctk.CTk):
         )
 
         # -------------------------------------------------
-        # STATE: SEARCH VALLEY
+        # SEARCH VALLEY
         # -------------------------------------------------
 
         if self.state == "SEARCH_VALLEY":
@@ -526,7 +577,7 @@ class InterferometerApp(ctk.CTk):
                 self.state = "SEARCH_PEAK"
 
         # -------------------------------------------------
-        # STATE: SEARCH PEAK
+        # SEARCH PEAK
         # -------------------------------------------------
 
         elif self.state == "SEARCH_PEAK":
@@ -539,10 +590,6 @@ class InterferometerApp(ctk.CTk):
                     self.last_peak
                     - self.last_valley
                 )
-
-                # -----------------------------------------
-                # NUR echte Fringes zählen
-                # -----------------------------------------
 
                 if (
                     amplitude > self.min_amplitude
@@ -559,109 +606,33 @@ class InterferometerApp(ctk.CTk):
 
                 else:
 
-                    # Fake peak ignorieren
                     self.state = "SEARCH_VALLEY"
 
         return False
 
     # =====================================================
-    # UPDATE INTENSITY LABEL
+    # UPDATE SIGNAL LABEL
     # =====================================================
 
-    def update_intensity_label(self, intensity, fringe_counted):
+    def update_signal_label(self, signal, fringe_counted):
 
-        self.label_intensity.configure(
-            text=f"Intensity: {intensity:.2f}"
+        self.label_signal.configure(
+            text=f"Signal: {signal:.2f}"
         )
 
         if fringe_counted:
 
-            self.label_intensity.configure(
+            self.label_signal.configure(
                 text_color=GREEN_COLOR
             )
 
             self.after(
-                300,
+                100,
                 lambda:
-                self.label_intensity.configure(
+                self.label_signal.configure(
                     text_color=TEXT_COLOR
                 )
             )
-
-    # =====================================================
-    # UPDATE IMAGE
-    # =====================================================
-
-    def update_image(self, img):
-
-        display = img.astype(np.float32)
-
-        display -= np.min(display)
-
-        if np.max(display) > 0:
-            display /= np.max(display)
-
-        display = (display * 255).astype(np.uint8)
-
-        pil = Image.fromarray(display).convert("RGB")
-
-        original_w, original_h = pil.size
-
-        scale_x = self.live_size[0] / original_w
-        scale_y = self.live_size[1] / original_h
-
-        pil = pil.resize(self.live_size)
-
-        draw = ImageDraw.Draw(pil)
-
-        x1 = int(self.camera_handler.roi_x * scale_x)
-        y1 = int(self.camera_handler.roi_y * scale_y)
-
-        x2 = int(
-            (self.camera_handler.roi_x + self.camera_handler.roi_w)
-            * scale_x
-        )
-
-        y2 = int(
-            (self.camera_handler.roi_y + self.camera_handler.roi_h)
-            * scale_y
-        )
-
-        draw.rectangle(
-            [x1, y1, x2, y2],
-            outline="yellow",
-            width=3
-        )
-
-        ctk_img = ctk.CTkImage(
-            light_image=pil,
-            size=self.live_size
-        )
-
-        self.image_label.configure(
-            image=ctk_img,
-            text=""
-        )
-
-        self.image_label.image = ctk_img
-
-    # =====================================================
-    # UPDATE VALUES
-    # =====================================================
-
-    def update_values(self, mm, um, ps):
-
-        self.label_mm.configure(
-            text=f"Distance: {mm:.6f} mm"
-        )
-
-        self.label_um.configure(
-            text=f"Distance: {um:.3f} µm"
-        )
-
-        self.label_ps.configure(
-            text=f"Time Delay: {ps:.4f} ps"
-        )
 
     # =====================================================
     # CLOSE
@@ -672,10 +643,12 @@ class InterferometerApp(ctk.CTk):
         self.is_monitoring = False
 
         try:
-            self.camera_handler.close()
+
+            self.scope_handler.close()
 
         except Exception as e:
-            print("Camera close error:", e)
+
+            print("Close error:", e)
 
         self.destroy()
 

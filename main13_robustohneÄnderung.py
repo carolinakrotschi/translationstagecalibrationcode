@@ -1,4 +1,4 @@
-# Version: Robuste Fringe-Erkennung mit nur zählen wenn nach valley ein berg kommt
+# Version: Robuste Fringe-Erkennung mit Hysterese + Glättung + Cooldown
 
 import os
 import threading
@@ -57,23 +57,12 @@ class InterferometerApp(ctk.CTk):
         self.is_monitoring = False
 
         self.intensity_history = []
-        self.history_size = 9
+        self.history_size = 15
 
         self.accumulated_fringes = 0
 
-        # Peak detector state machine
-        self.state = "SEARCH_VALLEY"
-
-        self.last_valley = None
-        self.last_peak = None
-
+        self.was_dark = False
         self.last_count_time = 0
-
-        # Minimum real fringe amplitude
-        self.min_amplitude = 35
-
-        # Cooldown against double counting
-        self.cooldown = 0.08
 
         # -------------------------------------------------
         # CAMERA
@@ -346,10 +335,7 @@ class InterferometerApp(ctk.CTk):
 
         self.accumulated_fringes = 0
 
-        self.state = "SEARCH_VALLEY"
-
-        self.last_valley = None
-        self.last_peak = None
+        self.was_dark = False
 
         self.last_count_time = 0
 
@@ -457,110 +443,59 @@ class InterferometerApp(ctk.CTk):
         if len(self.intensity_history) > self.history_size:
             self.intensity_history.pop(0)
 
-        # Noch nicht genug Daten
-        if len(self.intensity_history) < 7:
+        if len(self.intensity_history) < 20:
             return False
 
         signal = np.array(self.intensity_history)
 
         # -------------------------------------------------
-        # ROBUST SMOOTHING
+        # SMOOTHING
         # -------------------------------------------------
 
-        smooth_signal = []
+        smooth = np.mean(signal[-5:])
 
-        for i in range(2, len(signal) - 2):
+        # -------------------------------------------------
+        # DYNAMIC THRESHOLDS
+        # -------------------------------------------------
 
-            window = signal[i - 2:i + 3]
+        mean_val = np.mean(signal)
 
-            smooth_signal.append(np.median(window))
+        std_val = np.std(signal)
 
-        smooth_signal = np.array(smooth_signal)
+        if std_val < 20:
+            std_val = 20
 
-        # Mindestens 3 Punkte nötig
-        if len(smooth_signal) < 3:
+        dark_threshold = mean_val - 0.25 * std_val
+
+        bright_threshold = mean_val + 0.25 * std_val
+
+        # -------------------------------------------------
+        # STABLE DARK
+        # -------------------------------------------------
+
+        dark_state = np.mean(signal[-4:]) < dark_threshold
+
+        if dark_state:
+            self.was_dark = True
             return False
 
         # -------------------------------------------------
-        # LETZTE 3 PUNKTE
+        # STABLE BRIGHT
         # -------------------------------------------------
 
-        a = smooth_signal[-3]
-        b = smooth_signal[-2]
-        c = smooth_signal[-1]
+        bright_state = np.mean(signal[-4:]) > bright_threshold
 
-        current_time = time.time()
+        cooldown_ok = (time.time() - self.last_count_time) > 0.12
 
-        cooldown_ok = (
-            current_time - self.last_count_time
-        ) > self.cooldown
+        if self.was_dark and bright_state and cooldown_ok:
 
-        # -------------------------------------------------
-        # LOKALES MINIMUM (VALLEY)
-        # -------------------------------------------------
+            self.accumulated_fringes += 1
 
-        is_valley = (
-            b < a
-            and b < c
-        )
+            self.was_dark = False
 
-        # -------------------------------------------------
-        # LOKALES MAXIMUM (PEAK)
-        # -------------------------------------------------
+            self.last_count_time = time.time()
 
-        is_peak = (
-            b > a
-            and b > c
-        )
-
-        # -------------------------------------------------
-        # STATE: SEARCH VALLEY
-        # -------------------------------------------------
-
-        if self.state == "SEARCH_VALLEY":
-
-            if is_valley:
-
-                self.last_valley = b
-
-                self.state = "SEARCH_PEAK"
-
-        # -------------------------------------------------
-        # STATE: SEARCH PEAK
-        # -------------------------------------------------
-
-        elif self.state == "SEARCH_PEAK":
-
-            if is_peak:
-
-                self.last_peak = b
-
-                amplitude = (
-                    self.last_peak
-                    - self.last_valley
-                )
-
-                # -----------------------------------------
-                # NUR echte Fringes zählen
-                # -----------------------------------------
-
-                if (
-                    amplitude > self.min_amplitude
-                    and cooldown_ok
-                ):
-
-                    self.accumulated_fringes += 1
-
-                    self.last_count_time = current_time
-
-                    self.state = "SEARCH_VALLEY"
-
-                    return True
-
-                else:
-
-                    # Fake peak ignorieren
-                    self.state = "SEARCH_VALLEY"
+            return True
 
         return False
 
