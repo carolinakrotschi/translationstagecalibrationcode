@@ -1,28 +1,10 @@
-# =========================================================
-# INTERFEROMETER OSCILLOSCOPE MONITOR
-#
-# Fringe Detection über Photodiode + Oszilloskop
-#
-# Statt Kamera:
-# - direkte Spannungsmessung
-# - extrem hohe Samplingrate
-# - viel robuster
-#
-# Benötigt:
-# pip install pyvisa pyvisa-py numpy customtkinter
-#
-# =========================================================
+
 
 import threading
 import time
 import numpy as np
 import customtkinter as ctk
 import pyvisa
-
-
-# =========================================================
-# PHYSICS
-# =========================================================
 
 LASER_WAVELENGTH_NM = 632.8
 
@@ -34,9 +16,6 @@ FRINGE_DISTANCE_MM = (
 SPEED_OF_LIGHT_MM_PS = 0.299792458
 
 
-# =========================================================
-# COLORS
-# =========================================================
 
 TEXT_COLOR = "#0A4A51"
 
@@ -45,9 +24,6 @@ GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 
 
-# =========================================================
-# OSCILLOSCOPE HANDLER
-# =========================================================
 
 class OscilloscopeHandler:
 
@@ -59,9 +35,6 @@ class OscilloscopeHandler:
 
         self.simulation_mode = False
 
-        # ---------------------------------------------
-        # VISA
-        # ---------------------------------------------
 
         try:
 
@@ -97,21 +70,11 @@ class OscilloscopeHandler:
 
             self.connected = True
 
-        # ---------------------------------------------
-        # SIMULATION
-        # ---------------------------------------------
-
         self.sim_phase = 0
 
-    # =====================================================
-    # READ SIGNAL
-    # =====================================================
 
     def get_signal_value(self):
 
-        # -------------------------------------------------
-        # SIMULATION MODE
-        # -------------------------------------------------
 
         if self.simulation_mode:
 
@@ -125,9 +88,7 @@ class OscilloscopeHandler:
 
             return float(signal)
 
-        # -------------------------------------------------
-        # REAL OSCILLOSCOPE
-        # -------------------------------------------------
+    
 
         try:
 
@@ -158,9 +119,7 @@ class OscilloscopeHandler:
 
             return None
 
-    # =====================================================
-    # CLOSE
-    # =====================================================
+
 
     def close(self):
 
@@ -174,9 +133,6 @@ class OscilloscopeHandler:
             print("Scope close error:", e)
 
 
-# =========================================================
-# APP
-# =========================================================
 
 class InterferometerApp(ctk.CTk):
 
@@ -184,9 +140,7 @@ class InterferometerApp(ctk.CTk):
 
         super().__init__()
 
-        # -------------------------------------------------
-        # STATES
-        # -------------------------------------------------
+     
 
         self.is_monitoring = False
 
@@ -196,11 +150,8 @@ class InterferometerApp(ctk.CTk):
 
         self.accumulated_fringes = 0
 
-        # -------------------------------------------------
-        # PEAK DETECTOR
-        # -------------------------------------------------
 
-        self.state = "SEARCH_VALLEY"
+        self.detector_state = "SEARCH_VALLEY"
 
         self.last_valley = None
 
@@ -212,17 +163,13 @@ class InterferometerApp(ctk.CTk):
 
         self.cooldown = 0.001
 
-        # -------------------------------------------------
-        # OSCILLOSCOPE
-        # -------------------------------------------------
+        
 
         self.scope_handler = OscilloscopeHandler()
 
         self.scope_connected = self.scope_handler.connected
 
-        # -------------------------------------------------
-        # WINDOW
-        # -------------------------------------------------
+        
 
         self.title("Interferometer Oscilloscope Monitor")
 
@@ -232,9 +179,7 @@ class InterferometerApp(ctk.CTk):
 
         self.configure(fg_color="white")
 
-        # -------------------------------------------------
-        # TITLE
-        # -------------------------------------------------
+        
 
         ctk.CTkLabel(
             self,
@@ -243,9 +188,7 @@ class InterferometerApp(ctk.CTk):
             text_color=TEXT_COLOR
         ).pack(pady=20)
 
-        # -------------------------------------------------
-        # START BUTTON
-        # -------------------------------------------------
+        
 
         self.btn = ctk.CTkButton(
             self,
@@ -259,9 +202,7 @@ class InterferometerApp(ctk.CTk):
 
         self.btn.pack(pady=10)
 
-        # -------------------------------------------------
-        # RESET BUTTON
-        # -------------------------------------------------
+        
 
         self.restart_btn = ctk.CTkButton(
             self,
@@ -275,9 +216,7 @@ class InterferometerApp(ctk.CTk):
 
         self.restart_btn.pack(pady=5)
 
-        # -------------------------------------------------
-        # STATUS
-        # -------------------------------------------------
+       
 
         self.status = ctk.CTkLabel(
             self,
@@ -288,9 +227,6 @@ class InterferometerApp(ctk.CTk):
 
         self.status.pack(pady=10)
 
-        # -------------------------------------------------
-        # INFO FRAME
-        # -------------------------------------------------
 
         self.frame = ctk.CTkFrame(
             self,
@@ -303,9 +239,7 @@ class InterferometerApp(ctk.CTk):
             fill="x"
         )
 
-        # -------------------------------------------------
-        # SIGNAL
-        # -------------------------------------------------
+       
 
         self.label_signal = ctk.CTkLabel(
             self.frame,
@@ -423,7 +357,7 @@ class InterferometerApp(ctk.CTk):
 
         self.accumulated_fringes = 0
 
-        self.state = "SEARCH_VALLEY"
+        self.detector_state = "SEARCH_VALLEY"
 
         self.last_valley = None
 
@@ -568,19 +502,19 @@ class InterferometerApp(ctk.CTk):
         # SEARCH VALLEY
         # -------------------------------------------------
 
-        if self.state == "SEARCH_VALLEY":
+        if self.detector_state == "SEARCH_VALLEY":
 
             if is_valley:
 
                 self.last_valley = b
 
-                self.state = "SEARCH_PEAK"
+                self.detector_state = "SEARCH_PEAK"
 
         # -------------------------------------------------
         # SEARCH PEAK
         # -------------------------------------------------
 
-        elif self.state == "SEARCH_PEAK":
+        elif self.detector_state == "SEARCH_PEAK":
 
             if is_peak:
 
@@ -600,13 +534,13 @@ class InterferometerApp(ctk.CTk):
 
                     self.last_count_time = current_time
 
-                    self.state = "SEARCH_VALLEY"
+                    self.detector_state = "SEARCH_VALLEY"
 
                     return True
 
                 else:
 
-                    self.state = "SEARCH_VALLEY"
+                    self.detector_state = "SEARCH_VALLEY"
 
         return False
 
@@ -655,7 +589,7 @@ class InterferometerApp(ctk.CTk):
 
 # =========================================================
 # MAIN
-# =========================================================
+
 
 if __name__ == "__main__":
 

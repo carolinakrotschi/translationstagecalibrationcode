@@ -1,6 +1,5 @@
 # Version: Hardcoded Fringe Detection
-# Dunkelbereich: 100 - 400
-# Hellbereich: 800 - 900
+
 
 import os
 import threading
@@ -13,9 +12,7 @@ from PIL import Image, ImageDraw
 from camera_handler import CameraHandler
 
 
-# =========================================================
-# DLL / CAMERA
-# =========================================================
+
 
 current_directory = os.path.dirname(os.path.abspath(__file__))
 dll_path = os.path.join(current_directory, "Camera")
@@ -25,9 +22,7 @@ if os.path.exists(dll_path):
     print(f"Drivers loaded: {dll_path}")
 
 
-# =========================================================
-# PHYSICS
-# =========================================================
+
 
 LASER_WAVELENGTH_NM = 632.8
 
@@ -49,8 +44,8 @@ RED_COLOR = "#C0392B"
 # HARD CODED THRESHOLDS
 # =========================================================
 
-DARK_THRESHOLD = 400
-BRIGHT_THRESHOLD = 800
+DARK_THRESHOLD = 8
+BRIGHT_THRESHOLD = 21
 
 # wie viele stabile Frames nötig
 REQUIRED_DARK_FRAMES = 3
@@ -246,7 +241,7 @@ class InterferometerApp(ctk.CTk):
         # LIVE IMAGE
         # -------------------------------------------------
 
-        self.live_size = (620, 460)
+        self.live_size = (320, 260)
 
         ctk.CTkLabel(
             self,

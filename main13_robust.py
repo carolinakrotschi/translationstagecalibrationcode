@@ -62,7 +62,7 @@ class InterferometerApp(ctk.CTk):
         self.accumulated_fringes = 0
 
         # Peak detector state machine
-        self.state = "SEARCH_VALLEY"
+        self.detector_state = "SEARCH_VALLEY"
 
         self.last_valley = None
         self.last_peak = None
@@ -346,7 +346,7 @@ class InterferometerApp(ctk.CTk):
 
         self.accumulated_fringes = 0
 
-        self.state = "SEARCH_VALLEY"
+        self.detector_state = "SEARCH_VALLEY"
 
         self.last_valley = None
         self.last_peak = None
@@ -517,19 +517,19 @@ class InterferometerApp(ctk.CTk):
         # STATE: SEARCH VALLEY
         # -------------------------------------------------
 
-        if self.state == "SEARCH_VALLEY":
+        if self.detector_state == "SEARCH_VALLEY":
 
             if is_valley:
 
                 self.last_valley = b
 
-                self.state = "SEARCH_PEAK"
+                self.detector_state = "SEARCH_PEAK"
 
         # -------------------------------------------------
         # STATE: SEARCH PEAK
         # -------------------------------------------------
 
-        elif self.state == "SEARCH_PEAK":
+        elif self.detector_state == "SEARCH_PEAK":
 
             if is_peak:
 
@@ -553,14 +553,14 @@ class InterferometerApp(ctk.CTk):
 
                     self.last_count_time = current_time
 
-                    self.state = "SEARCH_VALLEY"
+                    self.detector_state = "SEARCH_VALLEY"
 
                     return True
 
                 else:
 
                     # Fake peak ignorieren
-                    self.state = "SEARCH_VALLEY"
+                    self.detector_state = "SEARCH_VALLEY"
 
         return False
 

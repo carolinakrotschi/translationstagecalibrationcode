@@ -17,7 +17,7 @@ class CameraHandler:
         self.roi_h = 40
 
         # Camera Settings hier einstellen
-        self.exposure_us = 100 #in mykrometer
+        self.exposure_us = 10 #in mykrometer
         self.gain = 5
         self.black_level = 0
 
@@ -91,7 +91,22 @@ class CameraHandler:
             except Exception as e:
                 print("Could not set continuous mode:", e)
 
-            self.camera.arm(2)
+            try:
+                self.camera.arm(frames_to_buffer=10)
+            except Exception as e:
+                print("Could not arm camera:", e)
+                raise
+
+            try:
+                if hasattr(self.camera, "issue_software_trigger"):
+                    self.camera.issue_software_trigger()
+                    time.sleep(0.05)
+                    frame = self.camera.get_pending_frame_or_null()
+                    if frame is None:
+                        raise Exception("No frame received after software trigger.")
+            except Exception as e:
+                print("Could not start acquisition:", e)
+                raise
 
             self.is_connected = True
             print("Camera connected.")
@@ -126,13 +141,16 @@ class CameraHandler:
             return None
 
         try:
+            if hasattr(self.camera, "issue_software_trigger"):
+                self.camera.issue_software_trigger()
+
             for _ in range(20):
                 frame = self.camera.get_pending_frame_or_null()
 
                 if frame is not None:
                     return np.copy(frame.image_buffer)
 
-                #time.sleep(0.001)
+                time.sleep(0.001)
 
         except Exception as e:
             print("Frame read error:", e)
