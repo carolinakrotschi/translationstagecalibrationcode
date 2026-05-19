@@ -1,6 +1,4 @@
-# Version: Hardcoded Fringe Detection
-
-
+#elektronische translationstage
 import os
 import threading
 import time
@@ -8,10 +6,9 @@ import numpy as np
 import customtkinter as ctk
 
 from PIL import Image, ImageDraw
+from pipython import GCSDevice
 
 from camera_handler import CameraHandler
-
-
 
 
 current_directory = os.path.dirname(os.path.abspath(__file__))
@@ -22,88 +19,134 @@ if os.path.exists(dll_path):
     print(f"Drivers loaded: {dll_path}")
 
 
-
-
-LASER_WAVELENGTH_NM = 1576
-
+LASER_WAVELENGTH_NM = 632.8
 FRINGE_DISTANCE_MM = (LASER_WAVELENGTH_NM / 2) / 1_000_000
-
 SPEED_OF_LIGHT_MM_PS = 0.299792458
-
-
-# =========================================================
-# COLORS
-# =========================================================
 
 TEXT_COLOR = "#0A4A51"
 GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 
-
-# =========================================================
-# HARD CODED THRESHOLDS
-# =========================================================
-
 DARK_THRESHOLD = 8
 BRIGHT_THRESHOLD = 21
 
-# wie viele stabile Frames nötig
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
-
-# verhindert Mehrfachzählung
 FRINGE_COOLDOWN = 0.08
 
+STAGE_AXIS = "1"
 
-# =========================================================
-# APP
-# =========================================================
+
+class TranslationStage:
+
+    def __init__(self):
+        self.device = None
+        self.connected = False
+        self.position_mm = 0.0
+        self.target_mm = 0.0
+        self.start_position_mm = 0.0
+        self.requested_move_mm = 0.0
+        self.is_moving = False
+
+    def connect(self):
+        try:
+            self.device = GCSDevice()
+            self.device.InterfaceSetupDlg()
+            self.connected = True
+            self.position_mm = self.get_position()
+            return True
+
+        except Exception as e:
+            print("Stage connection error:", e)
+            self.connected = False
+            return False
+
+    def get_position(self):
+        if not self.connected:
+            return self.position_mm
+
+        try:
+            pos = self.device.qPOS(STAGE_AXIS)
+            self.position_mm = float(pos[STAGE_AXIS])
+            return self.position_mm
+
+        except Exception as e:
+            print("Stage position error:", e)
+            return self.position_mm
+
+    def move_relative(self, distance_mm):
+        if not self.connected:
+            return
+
+        if self.is_moving:
+            return
+
+        def worker():
+            try:
+                self.is_moving = True
+
+                self.start_position_mm = self.get_position()
+                self.requested_move_mm = distance_mm
+                self.target_mm = self.start_position_mm + distance_mm
+
+                self.device.MOV(STAGE_AXIS, self.target_mm)
+
+                while self.device.IsMoving()[STAGE_AXIS]:
+                    self.position_mm = self.get_position()
+                    time.sleep(0.05)
+
+                self.position_mm = self.get_position()
+
+            except Exception as e:
+                print("Stage move error:", e)
+
+            finally:
+                self.is_moving = False
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def stop(self):
+        try:
+            if self.connected and self.device is not None:
+                self.device.STP()
+        except Exception as e:
+            print("Stage stop error:", e)
+
+    def close(self):
+        try:
+            if self.device is not None:
+                self.device.CloseConnection()
+        except Exception as e:
+            print("Stage close error:", e)
+
 
 class InterferometerApp(ctk.CTk):
 
     def __init__(self):
         super().__init__()
 
-        # -------------------------------------------------
-        # STATES
-        # -------------------------------------------------
-
         self.is_monitoring = False
-
         self.accumulated_fringes = 0
-
         self.was_dark = False
-
         self.last_count_time = 0
-
         self.dark_counter = 0
         self.bright_counter = 0
-
         self.intensity_history = []
 
-        # -------------------------------------------------
-        # CAMERA
-        # -------------------------------------------------
-
         self.camera_handler = CameraHandler()
-
         self.camera_connected = self.camera_handler.connect()
 
-        # -------------------------------------------------
-        # WINDOW
-        # -------------------------------------------------
+        self.stage = TranslationStage()
+        self.stage_connected = self.stage.connect()
+
+        self.stage_start_position = 0.0
+        self.stage_requested_move = 0.0
 
         self.title("Interferometer Monitor")
-
-        self.geometry("760x1050")
+        self.geometry("760x1180")
 
         ctk.set_appearance_mode("light")
-
         self.configure(fg_color="white")
-
-        # -------------------------------------------------
-        # TITLE
-        # -------------------------------------------------
 
         ctk.CTkLabel(
             self,
@@ -111,10 +154,6 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 26, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=20)
-
-        # -------------------------------------------------
-        # START BUTTON
-        # -------------------------------------------------
 
         self.btn = ctk.CTkButton(
             self,
@@ -125,12 +164,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 16, "bold"),
             fg_color=TEXT_COLOR
         )
-
         self.btn.pack(pady=10)
-
-        # -------------------------------------------------
-        # RESET BUTTON
-        # -------------------------------------------------
 
         self.restart_btn = ctk.CTkButton(
             self,
@@ -141,12 +175,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 14, "bold"),
             fg_color="#D35400"
         )
-
         self.restart_btn.pack(pady=5)
-
-        # -------------------------------------------------
-        # STATUS
-        # -------------------------------------------------
 
         self.status = ctk.CTkLabel(
             self,
@@ -154,27 +183,81 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 15),
             text_color=TEXT_COLOR
         )
-
         self.status.pack(pady=5)
 
-        # -------------------------------------------------
-        # INFO FRAME
-        # -------------------------------------------------
+        self.stage_frame = ctk.CTkFrame(self, fg_color="#EEEEEE")
+        self.stage_frame.pack(pady=15, padx=25, fill="x")
 
-        self.frame = ctk.CTkFrame(
-            self,
-            fg_color="#EEEEEE"
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Translation Stage Control",
+            font=("Arial", 18, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=8)
+
+        self.stage_entry = ctk.CTkEntry(
+            self.stage_frame,
+            placeholder_text="Move distance in mm",
+            width=220
         )
+        self.stage_entry.pack(pady=5)
 
-        self.frame.pack(
-            pady=20,
-            padx=25,
-            fill="x"
+        self.stage_btn = ctk.CTkButton(
+            self.stage_frame,
+            text="MOVE STAGE",
+            command=self.move_stage,
+            height=40,
+            width=220,
+            font=("Arial", 14, "bold"),
+            fg_color=TEXT_COLOR
         )
+        self.stage_btn.pack(pady=5)
 
-        # -------------------------------------------------
-        # DISTANCE MM
-        # -------------------------------------------------
+        self.stage_stop_btn = ctk.CTkButton(
+            self.stage_frame,
+            text="STOP STAGE",
+            command=self.stop_stage,
+            height=35,
+            width=200,
+            font=("Arial", 13, "bold"),
+            fg_color=RED_COLOR
+        )
+        self.stage_stop_btn.pack(pady=5)
+
+        self.label_stage_connection = ctk.CTkLabel(
+            self.stage_frame,
+            text=f"Stage Connected: {self.stage_connected}",
+            font=("Arial", 15),
+            text_color=GREEN_COLOR if self.stage_connected else RED_COLOR
+        )
+        self.label_stage_connection.pack(pady=3)
+
+        self.label_stage_target = ctk.CTkLabel(
+            self.stage_frame,
+            text="Target Move: 0.000000 mm",
+            font=("Arial", 15),
+            text_color=TEXT_COLOR
+        )
+        self.label_stage_target.pack(pady=3)
+
+        self.label_stage_position = ctk.CTkLabel(
+            self.stage_frame,
+            text="Stage Position: 0.000000 mm",
+            font=("Arial", 15),
+            text_color=TEXT_COLOR
+        )
+        self.label_stage_position.pack(pady=3)
+
+        self.label_stage_moved = ctk.CTkLabel(
+            self.stage_frame,
+            text="Moved Already: 0.000000 mm",
+            font=("Arial", 16, "bold"),
+            text_color=TEXT_COLOR
+        )
+        self.label_stage_moved.pack(pady=5)
+
+        self.frame = ctk.CTkFrame(self, fg_color="#EEEEEE")
+        self.frame.pack(pady=20, padx=25, fill="x")
 
         self.label_mm = ctk.CTkLabel(
             self.frame,
@@ -182,12 +265,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 16),
             text_color=TEXT_COLOR
         )
-
         self.label_mm.pack(pady=5)
-
-        # -------------------------------------------------
-        # DISTANCE UM
-        # -------------------------------------------------
 
         self.label_um = ctk.CTkLabel(
             self.frame,
@@ -195,12 +273,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 18, "bold"),
             text_color=TEXT_COLOR
         )
-
         self.label_um.pack(pady=5)
-
-        # -------------------------------------------------
-        # TIME DELAY
-        # -------------------------------------------------
 
         self.label_ps = ctk.CTkLabel(
             self.frame,
@@ -208,12 +281,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 16),
             text_color=TEXT_COLOR
         )
-
         self.label_ps.pack(pady=5)
-
-        # -------------------------------------------------
-        # INTENSITY
-        # -------------------------------------------------
 
         self.label_intensity = ctk.CTkLabel(
             self.frame,
@@ -221,12 +289,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 16),
             text_color=TEXT_COLOR
         )
-
         self.label_intensity.pack(pady=5)
-
-        # -------------------------------------------------
-        # FRINGE COUNT
-        # -------------------------------------------------
 
         self.label_accumulated_fringes = ctk.CTkLabel(
             self.frame,
@@ -234,12 +297,7 @@ class InterferometerApp(ctk.CTk):
             font=("Arial", 18, "bold"),
             text_color=TEXT_COLOR
         )
-
         self.label_accumulated_fringes.pack(pady=10)
-
-        # -------------------------------------------------
-        # LIVE IMAGE
-        # -------------------------------------------------
 
         self.live_size = (320, 260)
 
@@ -258,28 +316,22 @@ class InterferometerApp(ctk.CTk):
             fg_color="#111111",
             text_color="white"
         )
-
         self.image_label.pack(pady=10)
 
-    # =====================================================
-    # START / STOP
-    # =====================================================
+        self.update_stage_position_once()
 
     def toggle(self):
 
         if not self.is_monitoring:
 
             if not self.camera_connected:
-
                 self.status.configure(
                     text="Error: Camera not connected",
                     text_color="red"
                 )
-
                 return
 
             self.restart_values_only()
-
             self.is_monitoring = True
 
             self.btn.configure(
@@ -311,10 +363,6 @@ class InterferometerApp(ctk.CTk):
                 text_color=TEXT_COLOR
             )
 
-    # =====================================================
-    # RESET
-    # =====================================================
-
     def restart(self):
 
         self.restart_values_only()
@@ -324,35 +372,18 @@ class InterferometerApp(ctk.CTk):
             text_color="#D35400"
         )
 
-    # =====================================================
-    # RESET VALUES
-    # =====================================================
-
     def restart_values_only(self):
 
         self.accumulated_fringes = 0
-
         self.was_dark = False
-
         self.last_count_time = 0
-
         self.dark_counter = 0
-
         self.bright_counter = 0
-
         self.intensity_history = []
 
-        self.label_mm.configure(
-            text="Distance: 0.000000 mm"
-        )
-
-        self.label_um.configure(
-            text="Distance: 0.000 µm"
-        )
-
-        self.label_ps.configure(
-            text="Time Delay: 0.0000 ps"
-        )
+        self.label_mm.configure(text="Distance: 0.000000 mm")
+        self.label_um.configure(text="Distance: 0.000 µm")
+        self.label_ps.configure(text="Time Delay: 0.0000 ps")
 
         self.label_intensity.configure(
             text="Intensity: 0.00",
@@ -363,9 +394,112 @@ class InterferometerApp(ctk.CTk):
             text="Accumulated Fringes Count: 0"
         )
 
-    # =====================================================
-    # MAIN LOOP
-    # =====================================================
+    def move_stage(self):
+
+        if not self.stage_connected:
+            self.status.configure(
+                text="Error: Stage not connected",
+                text_color="red"
+            )
+            return
+
+        if self.stage.is_moving:
+            self.status.configure(
+                text="Stage is already moving",
+                text_color="#D35400"
+            )
+            return
+
+        try:
+            move_mm = float(self.stage_entry.get().replace(",", "."))
+
+        except ValueError:
+            self.status.configure(
+                text="Error: Invalid stage distance",
+                text_color="red"
+            )
+            return
+
+        self.stage_start_position = self.stage.get_position()
+        self.stage_requested_move = move_mm
+
+        self.label_stage_target.configure(
+            text=f"Target Move: {move_mm:.6f} mm"
+        )
+
+        self.label_stage_moved.configure(
+            text="Moved Already: 0.000000 mm"
+        )
+
+        self.status.configure(
+            text="Stage moving...",
+            text_color=TEXT_COLOR
+        )
+
+        self.stage.move_relative(move_mm)
+
+        threading.Thread(
+            target=self.stage_ui_loop,
+            daemon=True
+        ).start()
+
+    def stop_stage(self):
+
+        if self.stage_connected:
+            self.stage.stop()
+
+        self.status.configure(
+            text="Stage stopped",
+            text_color=RED_COLOR
+        )
+
+    def stage_ui_loop(self):
+
+        while self.stage.is_moving:
+
+            pos = self.stage.get_position()
+            moved = pos - self.stage_start_position
+
+            self.after(
+                0,
+                lambda p=pos, m=moved: self.update_stage_labels(p, m)
+            )
+
+            time.sleep(0.05)
+
+        pos = self.stage.get_position()
+        moved = pos - self.stage_start_position
+
+        self.after(
+            0,
+            lambda p=pos, m=moved: self.update_stage_labels(p, m)
+        )
+
+        self.after(
+            0,
+            lambda: self.status.configure(
+                text="Stage move finished",
+                text_color=GREEN_COLOR
+            )
+        )
+
+    def update_stage_position_once(self):
+
+        if self.stage_connected:
+            pos = self.stage.get_position()
+            self.label_stage_position.configure(
+                text=f"Stage Position: {pos:.6f} mm"
+            )
+
+    def update_stage_labels(self, position_mm, moved_mm):
+
+        self.label_stage_position.configure(
+            text=f"Stage Position: {position_mm:.6f} mm"
+        )
+
+        self.label_stage_moved.configure(
+            text=f"Moved Already: {moved_mm:.6f} mm"
+        )
 
     def loop(self):
 
@@ -380,9 +514,7 @@ class InterferometerApp(ctk.CTk):
 
             frame_counter += 1
 
-            # nur jedes 20. Bild anzeigen
             if frame_counter % 20 == 0:
-
                 self.after(
                     0,
                     lambda f=img: self.update_image(f)
@@ -401,9 +533,7 @@ class InterferometerApp(ctk.CTk):
                 )
 
             dist_mm = self.accumulated_fringes * FRINGE_DISTANCE_MM
-
             dist_um = dist_mm * 1000
-
             time_ps = (2 * dist_mm) / SPEED_OF_LIGHT_MM_PS
 
             self.after(
@@ -420,10 +550,6 @@ class InterferometerApp(ctk.CTk):
                 )
             )
 
-    # =====================================================
-    # HARD CODED FRINGE DETECTION
-    # =====================================================
-
     def update_accumulated_fringes(self, intensity):
 
         self.intensity_history.append(intensity)
@@ -431,40 +557,20 @@ class InterferometerApp(ctk.CTk):
         if len(self.intensity_history) > 5:
             self.intensity_history.pop(0)
 
-        # kleine Ausreißer glätten
         smooth_intensity = np.mean(self.intensity_history)
 
-        # -------------------------------------------------
-        # DUNKEL
-        # -------------------------------------------------
-
         if smooth_intensity < DARK_THRESHOLD:
-
             self.dark_counter += 1
-
         else:
-
             self.dark_counter = 0
 
         if self.dark_counter >= REQUIRED_DARK_FRAMES:
-
             self.was_dark = True
 
-        # -------------------------------------------------
-        # HELL
-        # -------------------------------------------------
-
         if smooth_intensity > BRIGHT_THRESHOLD:
-
             self.bright_counter += 1
-
         else:
-
             self.bright_counter = 0
-
-        # -------------------------------------------------
-        # FRINGE COUNT
-        # -------------------------------------------------
 
         cooldown_ok = (
             time.time() - self.last_count_time
@@ -477,21 +583,14 @@ class InterferometerApp(ctk.CTk):
         ):
 
             self.accumulated_fringes += 1
-
             self.was_dark = False
-
             self.last_count_time = time.time()
-
             self.dark_counter = 0
             self.bright_counter = 0
 
             return True
 
         return False
-
-    # =====================================================
-    # UPDATE INTENSITY LABEL
-    # =====================================================
 
     def update_intensity_label(self, intensity, fringe_counted):
 
@@ -512,10 +611,6 @@ class InterferometerApp(ctk.CTk):
                     text_color=TEXT_COLOR
                 )
             )
-
-    # =====================================================
-    # UPDATE IMAGE
-    # =====================================================
 
     def update_image(self, img):
 
@@ -570,10 +665,6 @@ class InterferometerApp(ctk.CTk):
 
         self.image_label.image = ctk_img
 
-    # =====================================================
-    # UPDATE VALUES
-    # =====================================================
-
     def update_values(self, mm, um, ps):
 
         self.label_mm.configure(
@@ -588,26 +679,22 @@ class InterferometerApp(ctk.CTk):
             text=f"Time Delay: {ps:.4f} ps"
         )
 
-    # =====================================================
-    # CLOSE
-    # =====================================================
-
     def on_close(self):
 
         self.is_monitoring = False
 
         try:
             self.camera_handler.close()
-
         except Exception as e:
             print("Camera close error:", e)
 
+        try:
+            self.stage.close()
+        except Exception as e:
+            print("Stage close error:", e)
+
         self.destroy()
 
-
-# =========================================================
-# MAIN
-# =========================================================
 
 if __name__ == "__main__":
 
