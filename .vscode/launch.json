@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run main17_electrtranslpro.py",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main17_electrtranslpro.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv314/bin/python",
+            "justMyCode": true
+        }
+    ]
+}
