@@ -22,9 +22,9 @@ class StageController:
 
         self.is_moving = False
 
-        self.min_position = -7.5
+        self.min_position = -13
 
-        self.max_position = 7.5
+        self.max_position = 13
 
     def connect(self):
 
@@ -38,6 +38,8 @@ class StageController:
 
             self.current_position = self.get_position()
 
+            self.update_travel_limits()
+
             return True
 
         except Exception as e:
@@ -47,6 +49,22 @@ class StageController:
             self.connected = False
 
             return False
+
+    def update_travel_limits(self):
+
+        try:
+
+            min_pos = self.device.qTMN(STAGE_AXIS)
+
+            max_pos = self.device.qTMX(STAGE_AXIS)
+
+            self.min_position = float(min_pos[STAGE_AXIS])
+
+            self.max_position = float(max_pos[STAGE_AXIS])
+
+        except Exception as e:
+
+            print("Stage limit read error:", e)
 
     def get_position(self):
 
@@ -69,29 +87,33 @@ class StageController:
 
             return self.current_position
 
+    def clamp_position(self, position_mm):
+
+        return max(
+            self.min_position,
+            min(
+                self.max_position,
+                float(position_mm)
+            )
+        )
+
     def move_absolute(self, target_mm):
 
         if not self.connected:
-            return
+            return False
 
         if self.is_moving:
-            return
+            return False
+
+        target_mm = self.clamp_position(target_mm)
+
+        self.target_position = target_mm
+
+        self.is_moving = True
 
         def worker():
 
             try:
-
-                self.is_moving = True
-
-                target_mm = max(
-                    self.min_position,
-                    min(
-                        self.max_position,
-                        target_mm
-                    )
-                )
-
-                self.target_position = target_mm
 
                 self.device.MOV(
                     STAGE_AXIS,
@@ -123,35 +145,37 @@ class StageController:
             daemon=True
         ).start()
 
+        return True
+
     def move_relative(self, distance_mm):
 
         current = self.get_position()
 
         target = current + distance_mm
 
-        self.move_absolute(target)
+        return self.move_absolute(target)
 
     def step_positive(self):
 
-        self.move_relative(
+        return self.move_relative(
             self.step_size
         )
 
     def step_negative(self):
 
-        self.move_relative(
+        return self.move_relative(
             -self.step_size
         )
 
     def move_to_max(self):
 
-        self.move_absolute(
+        return self.move_absolute(
             self.max_position
         )
 
     def move_to_min(self):
 
-        self.move_absolute(
+        return self.move_absolute(
             self.min_position
         )
 
