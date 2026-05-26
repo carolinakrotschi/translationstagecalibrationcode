@@ -11,7 +11,7 @@ from stage_controller import StageController
 from fringe_counter import FringeCounter
 
 
-LASER_WAVELENGTH_NM = 632.8
+LASER_WAVELENGTH_NM = 1576.3
 
 FRINGE_DISTANCE_MM = (
     (LASER_WAVELENGTH_NM / 2) / 1_000_000

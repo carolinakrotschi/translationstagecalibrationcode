@@ -1,7 +1,7 @@
 MANUAL_THRESHOLDS = False
 
-MANUAL_DARK_THRESHOLD = 8
-MANUAL_BRIGHT_THRESHOLD = 21
+MANUAL_DARK_THRESHOLD = 7
+MANUAL_BRIGHT_THRESHOLD = 25
 
 
 import os
@@ -23,10 +23,10 @@ if os.path.exists(dll_path):
     os.add_dll_directory(dll_path)
 
 
-LASER_WAVELENGTH_NM = 632.8
+LASER_WAVELENGTH_NM = 1576.3
 
 FRINGE_DISTANCE_MM = (
-    (LASER_WAVELENGTH_NM / 2) / 1_000_000
+    (LASER_WAVELENGTH_NM / 2) / 1_000_000/2 #licht geht ja hin und zurueck, also 0.0004mm translationstage bewegen bedeutet nur ein halber fringe 0.000788
 )
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
