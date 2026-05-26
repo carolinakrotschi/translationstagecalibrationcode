@@ -64,8 +64,8 @@ class InterferometerApp(ctk.CTk):
         self.scroll.pack(
             fill="both",
             expand=True,
-            padx=10,
-            pady=10
+            padx=2,
+            pady=2
         )
 
         self.is_monitoring = False
@@ -115,41 +115,41 @@ class InterferometerApp(ctk.CTk):
         ctk.CTkLabel(
             self.scroll,
             text="Interferometer Monitor",
-            font=("Arial", 28, "bold"),
+            font=("Arial", 23, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=20)
+        ).pack(pady=5)
 
         self.btn = ctk.CTkButton(
             self.scroll,
             text="START MONITORING",
             command=self.toggle,
-            width=260,
-            height=45,
+            width=180,
+            height=30,
             fg_color=TEXT_COLOR,
-            font=("Arial", 16, "bold")
+            font=("Arial", 11, "bold")
         )
 
-        self.btn.pack(pady=10)
+        self.btn.pack(pady=2)
 
         self.restart_btn = ctk.CTkButton(
             self.scroll,
             text="RESET",
             command=self.restart,
-            width=220,
-            height=40,
+            width=140,
+            height=28,
             fg_color=ORANGE_COLOR
         )
 
-        self.restart_btn.pack(pady=5)
+        self.restart_btn.pack(pady=1)
 
         self.status = ctk.CTkLabel(
             self.scroll,
             text="Status: Stopped",
-            font=("Arial", 16),
+            font=("Arial", 11),
             text_color=TEXT_COLOR
         )
 
-        self.status.pack(pady=10)
+        self.status.pack(pady=2)
 
         self.stage_frame = ctk.CTkFrame(
             self.scroll,
@@ -158,16 +158,16 @@ class InterferometerApp(ctk.CTk):
 
         self.stage_frame.pack(
             fill="x",
-            padx=20,
-            pady=15
+            padx=5,
+            pady=4
         )
 
         ctk.CTkLabel(
             self.stage_frame,
             text="Electronic Translation Stage",
-            font=("Arial", 20, "bold"),
+            font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=10)
+        ).pack(pady=2)
 
         self.stage_entry = ctk.CTkEntry(
             self.stage_frame,
@@ -175,25 +175,15 @@ class InterferometerApp(ctk.CTk):
             width=250
         )
 
-        self.stage_entry.pack(pady=5)
-
-        self.stage_btn = ctk.CTkButton(
-            self.stage_frame,
-            text="MOVE STAGE",
-            command=self.move_stage,
-            width=220,
-            height=40,
-            fg_color=TEXT_COLOR
-        )
-
-        self.stage_btn.pack(pady=5)
+        self.stage_entry.pack(pady=1)
+        self.stage_entry.insert(0, "0.0001")
 
         self.button_frame = ctk.CTkFrame(
             self.stage_frame,
             fg_color="transparent"
         )
 
-        self.button_frame.pack(pady=5)
+        self.button_frame.pack(pady=1)
 
         self.btn_min = ctk.CTkButton(
             self.button_frame,
@@ -206,7 +196,7 @@ class InterferometerApp(ctk.CTk):
         self.btn_min.grid(
             row=0,
             column=0,
-            padx=5
+            padx=1
         )
 
         self.btn_left = ctk.CTkButton(
@@ -220,7 +210,7 @@ class InterferometerApp(ctk.CTk):
         self.btn_left.grid(
             row=0,
             column=1,
-            padx=5
+            padx=1
         )
 
         self.btn_center = ctk.CTkButton(
@@ -234,7 +224,7 @@ class InterferometerApp(ctk.CTk):
         self.btn_center.grid(
             row=0,
             column=2,
-            padx=5
+            padx=1
         )
 
         self.btn_right = ctk.CTkButton(
@@ -248,7 +238,7 @@ class InterferometerApp(ctk.CTk):
         self.btn_right.grid(
             row=0,
             column=3,
-            padx=5
+            padx=1
         )
 
         self.btn_max = ctk.CTkButton(
@@ -262,27 +252,27 @@ class InterferometerApp(ctk.CTk):
         self.btn_max.grid(
             row=0,
             column=4,
-            padx=5
+            padx=1
         )
 
 
         self.label_stage_position = ctk.CTkLabel(
             self.stage_frame,
             text="Stage Position: 0.000000 mm",
-            font=("Arial", 15),
+            font=("Arial", 10),
             text_color=TEXT_COLOR
         )
 
-        self.label_stage_position.pack(pady=5)
+        self.label_stage_position.pack(pady=0)
 
         self.label_stage_moved = ctk.CTkLabel(
             self.stage_frame,
             text="Accumulated Movement: 0.000000 mm",
-            font=("Arial", 16, "bold"),
+            font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         )
 
-        self.label_stage_moved.pack(pady=5)
+        self.label_stage_moved.pack(pady=0)
 
         self.frame = ctk.CTkFrame(
             self.scroll,
@@ -291,63 +281,52 @@ class InterferometerApp(ctk.CTk):
 
         self.frame.pack(
             fill="x",
-            padx=20,
-            pady=15
+            padx=5,
+            pady=4
         )
-
-        self.label_mm = ctk.CTkLabel(
-            self.frame,
-            text="Distance: 0.000000 mm",
-            font=("Arial", 16),
-            text_color=TEXT_COLOR
-        )
-
-        self.label_mm.pack(pady=5)
 
         self.label_um = ctk.CTkLabel(
             self.frame,
             text="Distance: 0.000 µm",
-            font=("Arial", 18, "bold"),
+            font=("Arial", 13, "bold"),
             text_color=TEXT_COLOR
         )
-
-        self.label_um.pack(pady=5)
+        self.label_um.pack(pady=0)
 
         self.label_ps = ctk.CTkLabel(
             self.frame,
             text="Time Delay: 0.0000 ps",
-            font=("Arial", 16),
+            font=("Arial", 11),
             text_color=TEXT_COLOR
         )
 
-        self.label_ps.pack(pady=5)
+        self.label_ps.pack(pady=0)
 
         self.label_intensity = ctk.CTkLabel(
             self.frame,
             text="Intensity: 0.00",
-            font=("Arial", 16),
+            font=("Arial", 11),
             text_color=TEXT_COLOR
         )
-
-        self.label_intensity.pack(pady=5)
+        self.label_intensity.pack(pady=0)
 
         self.label_thresholds = ctk.CTkLabel(
             self.frame,
             text="Thresholds: waiting",
-            font=("Arial", 15),
+            font=("Arial", 10),
             text_color=TEXT_COLOR
         )
 
-        self.label_thresholds.pack(pady=5)
+        self.label_thresholds.pack(pady=0)
 
         self.label_accumulated_fringes = ctk.CTkLabel(
             self.frame,
             text="Accumulated Fringes Count: 0",
-            font=("Arial", 18, "bold"),
+            font=("Arial", 13, "bold"),
             text_color=TEXT_COLOR
         )
 
-        self.label_accumulated_fringes.pack(pady=10)
+        self.label_accumulated_fringes.pack(pady=0)
 
         self.compare_frame = ctk.CTkFrame(
             self.scroll,
@@ -356,52 +335,52 @@ class InterferometerApp(ctk.CTk):
 
         self.compare_frame.pack(
             fill="x",
-            padx=20,
-            pady=15
+            padx=5,
+            pady=4
         )
 
         ctk.CTkLabel(
             self.compare_frame,
-            text="Vergleich Strecke",
-            font=("Arial", 20, "bold"),
+            text="Distance Comparison",
+            font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=10)
+        ).pack(pady=0)
 
         self.label_compare_driven = ctk.CTkLabel(
             self.compare_frame,
-            text="Gefahren: 0.000000 mm",
-            font=("Arial", 16),
+            text="Driven: 0.000000 mm",
+            font=("Arial", 11),
             text_color=TEXT_COLOR
         )
 
-        self.label_compare_driven.pack(pady=4)
+        self.label_compare_driven.pack(pady=0)
 
         self.label_compare_calculated = ctk.CTkLabel(
             self.compare_frame,
-            text="Berechnet: 0.000000 mm",
-            font=("Arial", 16),
+            text="Calculated: 0.000000 mm",
+            font=("Arial", 11),
             text_color=TEXT_COLOR
         )
 
-        self.label_compare_calculated.pack(pady=4)
+        self.label_compare_calculated.pack(pady=0)
 
         self.label_compare_difference = ctk.CTkLabel(
             self.compare_frame,
-            text="Differenz: 0.000000 mm",
-            font=("Arial", 18, "bold"),
+            text="Difference: 0.000000 mm",
+            font=("Arial", 13, "bold"),
             text_color=TEXT_COLOR
         )
 
-        self.label_compare_difference.pack(pady=8)
+        self.label_compare_difference.pack(pady=0)
 
-        self.live_size = (420, 320)
+        self.live_size = (320, 220)
 
         ctk.CTkLabel(
             self.scroll,
             text="Live Camera",
-            font=("Arial", 20, "bold"),
+            font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=(20, 10))
+        ).pack(pady=(5, 2))
 
         self.image_label = ctk.CTkLabel(
             self.scroll,
@@ -412,7 +391,7 @@ class InterferometerApp(ctk.CTk):
             text_color="white"
         )
 
-        self.image_label.pack(pady=20)
+        self.image_label.pack(pady=5)
 
         self.update_comparison_labels()
 
@@ -518,9 +497,13 @@ class InterferometerApp(ctk.CTk):
 
         self.calibration_values = []
 
+        self.reset_stage_movement_tracking()
+
+        self.reset_measurement_after_calibration()
+
         if hasattr(self, "label_compare_driven"):
 
-            self.update_comparison_labels()
+            self.update_comparison_labels(0.0)
 
     def start_stage_move_to(
         self,
@@ -785,10 +768,6 @@ class InterferometerApp(ctk.CTk):
         self.bright_counter = 0
         self.intensity_history = []
 
-        self.label_mm.configure(
-            text="Distance: 0.000000 mm"
-        )
-
         self.label_um.configure(
             text="Distance: 0.000 µm"
         )
@@ -861,19 +840,19 @@ class InterferometerApp(ctk.CTk):
 
         self.label_compare_driven.configure(
             text=(
-                f"Gefahren: {driven_distance_mm:.6f} mm"
+                f"Driven: {driven_distance_mm:.6f} mm"
             )
         )
 
         self.label_compare_calculated.configure(
             text=(
-                f"Berechnet: {calculated_mm:.6f} mm"
+                f"Calculated: {calculated_mm:.6f} mm"
             )
         )
 
         self.label_compare_difference.configure(
             text=(
-                f"Differenz: {difference_mm:.6f} mm"
+                f"Difference: {difference_mm:.6f} mm"
             )
         )
 
@@ -947,7 +926,7 @@ class InterferometerApp(ctk.CTk):
 
                         self.bright_threshold = (
                             max_val
-                            - value_range * 0.15
+                            - value_range * 0.30
                         )
 
                         self.calibrating = False
@@ -1118,10 +1097,6 @@ class InterferometerApp(ctk.CTk):
         um,
         ps
     ):
-
-        self.label_mm.configure(
-            text=f"Distance: {mm:.6f} mm"
-        )
 
         self.label_um.configure(
             text=f"Distance: {um:.3f} µm"
