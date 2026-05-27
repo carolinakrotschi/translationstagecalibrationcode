@@ -22,3 +22,9 @@
             .\.venv314\Scripts\Activate.ps1
             python -m pip install -r requirements.txt
             then e.g. python main.py
+
+
+connecting the Hardware
+1. go to thorcam software and look at the image: is there interference?
+2. go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
+3. close both apps and then run the program
