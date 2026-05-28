@@ -1,22 +1,40 @@
+# TABLE OF CONTENTS FOR CAMERA_HANDLER_EXPL.PY
+# 1. Imports
+# 2. Camera setup
+# 3. Camera connection
+# 4. Frame acquisition
+# 5. ROI extraction
+# 6. Signal analysis
+# 7. Cleanup
+
+# -----------------------------------------------------------------------------
+# 1. IMPORTS
+# -----------------------------------------------------------------------------
 import numpy as np
 import time
-from scipy.signal import find_peaks
 
+# -----------------------------------------------------------------------------
+# 2. CAMERA HANDLER CLASS
+# -----------------------------------------------------------------------------
 
 class CameraHandler:
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL CAMERA STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
+    
     def __init__(self):
-        self.camera = None
-        self.sdk = None
+        self.camera = None #start without opened camera
+        self.sdk = None #start without SDK (software developement kit from thorlabs)
         self.is_connected = False
         self.simulation_mode = False
 
-        # ROI hier einstellen
+        # ROI
         self.roi_x = 754
         self.roi_y = 464
         self.roi_w = 40
         self.roi_h = 40
 
-        # Camera Settings hier einstellen
+        # Camera Settings
         self.exposure_us = 10 #in mykrometer
         self.gain = 5
         self.black_level = 0
@@ -29,8 +47,12 @@ class CameraHandler:
             print(f"SDK not found: {e}")
             print("Using simulation mode.")
             self.simulation_mode = True
-
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT TO CAMERA OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
+    
     def connect(self):
+        #use simulation first then try real camera
         if self.simulation_mode:
             self.is_connected = True
             print("Simulated camera connected.")
@@ -42,7 +64,7 @@ class CameraHandler:
             if len(cameras) == 0:
                 raise Exception("No Thorlabs camera found.")
 
-            self.camera = self.sdk.open_camera(cameras[0])
+            self.camera = self.sdk.open_camera(cameras[0]) #open the first detected camera
 
             # -------------------------------------------------
             # HARDWARE ROI
@@ -86,18 +108,18 @@ class CameraHandler:
             except Exception as e:
                 print("Could not set black level:", e)
 
-            try:
+            try: #try to put camera into continous acquisition mode
                 self.camera.frames_per_trigger_zero_for_unlimited = 0
             except Exception as e:
                 print("Could not set continuous mode:", e)
 
-            try:
+            try: #arm(start) camera for acquisition
                 self.camera.arm(frames_to_buffer=10)
             except Exception as e:
                 print("Could not arm camera:", e)
                 raise
 
-            try:
+            try: #test acquirision once so the the program knows, the camera can deliver frames
                 if hasattr(self.camera, "issue_software_trigger"):
                     self.camera.issue_software_trigger()
                     time.sleep(0.05)
@@ -108,7 +130,7 @@ class CameraHandler:
                 print("Could not start acquisition:", e)
                 raise
 
-            self.is_connected = True
+            self.is_connected = True #mark camera as connected after configuration and test frame succeed
             print("Camera connected.")
             return True
 
@@ -118,21 +140,25 @@ class CameraHandler:
             self.simulation_mode = True
             self.is_connected = True
             return True
-
+    # -----------------------------------------------------------------------------
+    # 4.1 READ ONE CAMERA FRAME
+    # -----------------------------------------------------------------------------
+    
     def get_frame(self):
+        #create the simulation frame
         if self.simulation_mode:
             img = np.random.normal(30, 8, (1024, 1280)).astype(np.float32)
 
             y, x = np.indices(img.shape)
             cx, cy = 760, 460
-
+            #create bright gaussian spot that imitates illuminated interferometer
             spot = 220 * np.exp(
                 -(((x - cx) ** 2) / (2 * 150 ** 2) +
                   ((y - cy) ** 2) / (2 * 190 ** 2))
             )
-
+            #add moving sinoidal fringes
             fringes = 45 * np.sin(0.09 * x + 0.04 * y + time.time() * 3)
-
+            #combine all and limit simulated brightness
             img = img + spot + fringes
             img = np.clip(img, 0, 255).astype(np.uint8)
             return img
@@ -146,7 +172,7 @@ class CameraHandler:
 
             for _ in range(20):
                 frame = self.camera.get_pending_frame_or_null()
-
+                #ask the camera to capture a frame
                 if frame is not None:
                     return np.copy(frame.image_buffer)
 
@@ -156,14 +182,17 @@ class CameraHandler:
             print("Frame read error:", e)
 
         return None
-
+    # -----------------------------------------------------------------------------
+    # 5.1 EXTRACT THE ANALYSIS ROI
+    # -----------------------------------------------------------------------------
+    
     def get_roi(self, img):
         if img is None:
             return None
 
         h, w = img.shape
 
-        x1 = max(0, min(self.roi_x, w - 1))
+        x1 = max(0, min(self.roi_x, w - 1)) #clamp roi inside image 
         y1 = max(0, min(self.roi_y, h - 1))
         x2 = max(0, min(x1 + self.roi_w, w))
         y2 = max(0, min(y1 + self.roi_h, h))
@@ -174,22 +203,10 @@ class CameraHandler:
             return None
 
         return roi
-
-    def get_contrast_from_frame(self, img):
-        roi = self.get_roi(img)
-
-        if roi is None:
-            return None
-
-        roi = roi.astype(np.float32)
-
-        roi_min = np.percentile(roi, 5)
-        roi_max = np.percentile(roi, 95)
-
-        contrast = (roi_max - roi_min) / (roi_max + roi_min + 1e-6)
-
-        return float(contrast)
-
+    # -----------------------------------------------------------------------------
+    # 6.2 CALCULATE MEAN ROI INTENSITY
+    # -----------------------------------------------------------------------------
+    
     def get_fringe_intensity_from_frame(self, img):
         # bleibt drin, falls alter Code es noch irgendwo nutzt
         roi = self.get_roi(img)
@@ -197,46 +214,16 @@ class CameraHandler:
         if roi is None:
             return None
 
-        return float(np.mean(roi))
-
-    def count_visible_fringes_from_frame(self, img):
-        roi = self.get_roi(img)
-
-        if roi is None:
-            return 0
-
-        roi = roi.astype(np.float32)
-        roi -= np.min(roi)
-
-        if np.max(roi) > 0:
-            roi /= np.max(roi)
-
-        profile = np.mean(roi, axis=0)
-
-        window = 9
-        kernel = np.ones(window) / window
-        profile_smooth = np.convolve(profile, kernel, mode="same")
-
-        mean_val = np.mean(profile_smooth)
-        std_val = np.std(profile_smooth)
-
-        if std_val == 0:
-            return 0
-
-        peaks, _ = find_peaks(
-            profile_smooth,
-            height=mean_val + 0.25 * std_val,
-            distance=8,
-            prominence=0.08 * std_val
-        )
-
-        return len(peaks)
-
+        return float(np.mean(roi)) #return the roi brightness
+     # -----------------------------------------------------------------------------
+    # 7.1 CLOSE CAMERA RESOURCES
+    # -----------------------------------------------------------------------------
+    
     def close(self):
         try:
             if self.camera is not None:
-                self.camera.disarm()
-                self.camera.dispose()
+                self.camera.disarm() #stop camera acquisition before disposing of the camera object
+                self.camera.dispose() #release camera object through sdk
                 self.camera = None
 
             if self.sdk is not None:

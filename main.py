@@ -1,4 +1,4 @@
-# TABLE OF CONTENTS FOR MAIN.PY
+# TABLE OF CONTENTS
 # 1. "Backup plan"/Basic Setting
 # 2. Imports and camera driver path
 # 3. Physical constants and colors
@@ -31,7 +31,7 @@ import time #for timestamps
 import numpy as np #to make computing more efficient with arrays
 import customtkinter as ctk #pythons standard UI library
 
-from PIL import Image, ImageDraw #for showing the live camera and drawing the ROI (Region of Interest)
+from PIL import Image #for showing the live camera
 
 from camera_handler import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
 
@@ -1888,47 +1888,7 @@ class InterferometerApp(ctk.CTk):
             "RGB"
         )
 
-        original_w, original_h = pil.size
-
-        scale_x = (
-            self.live_size[0] / original_w #calculate horizontal scaling from camera pixels
-        )
-
-        scale_y = (
-            self.live_size[1] / original_h
-        )
-
         pil = pil.resize(self.live_size) #resize camera image to preview area
-
-        draw = ImageDraw.Draw(pil)
-
-        x1 = int(
-            self.camera_handler.roi_x * scale_x
-        )
-
-        y1 = int(
-            self.camera_handler.roi_y * scale_y
-        )
-
-        x2 = int(
-            (
-                self.camera_handler.roi_x
-                + self.camera_handler.roi_w
-            ) * scale_x
-        )
-
-        y2 = int(
-            (
-                self.camera_handler.roi_y
-                + self.camera_handler.roi_h
-            ) * scale_y
-        )
-        #this is only for the simulation mode since in the real camera feed I use a hardware ROI for more efficient calculation, so the UI camera feed = ROI
-        draw.rectangle(
-            [x1, y1, x2, y2],
-            outline="yellow",
-            width=3
-        )
 
         ctk_img = ctk.CTkImage( #convert back into customtkinter image
             light_image=pil,
