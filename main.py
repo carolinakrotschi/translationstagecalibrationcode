@@ -1,14 +1,46 @@
 # TABLE OF CONTENTS
-# 1. "Backup plan"/Basic Setting
-# 2. Imports and camera driver path
-# 3. Physical constants and colors
-# 4. InterferometerApp class
-# 5. Monitoring and reset
-# 6. Translation stage control
-# 7. Lock function
-# 8. Calibration and comparison
-# 9. Camera loop and analysis
-# 10. Cleanup and program start
+# 1. Basic settings
+# 2. Imports
+# 3. Physical constants
+# 3.1 Colors and filter timings
+# 4. App class (UI)
+# 4.1 Initialization
+# 4.2 Enable or disable all buttons
+# 5.1 Start or stop monitoring
+# 5.2 Reset button
+# 6.1 Move stage to an absolute position
+# 6.2 Move stage by a relative distance
+# 6.3 Start moving stage to target in steps
+# 6.4 Move stage relatively in steps
+# 6.5 Worker for stepped movement
+# 6.6 Read step size from the UI
+# 6.7 Calculate fringe distance
+# 6.8 Apply a new laser wavelength
+# 6.9 Stage button actions
+# 7.1 Enable or disable position lock
+# 7.2 Clear position lock
+# 7.3 Lock tolerance
+# 7.4 Check whether lock correction is needed
+# 7.5 Follow the lock correction movement with UI
+# 7.6 Finish lock correction
+# 8.1 Track normal stage movement
+# 8.2 Show initial stage position
+# 8.3 Update stage movement display
+# 8.4 Reset stage movement tracking
+# 8.5 Reset fringe measurement display
+# 8.6 Start return after calibration
+# 8.7 Move stage during calibration
+# 8.8 Start pending return after calibration motion
+# 8.9 Center stage after a pending calibration move
+# 8.10 Finish calibration reset
+# 8.11 Update driven vs calculated distance
+# 9.1 Camera and measurement loop
+# 9.2 Detect and count fringes
+# 9.3 Show current intensity
+# 9.4 Show distance and time delay
+# 9.5 Show live camera image
+# 10.1 Shut down hardware cleanly
+# 10.2 Program start
 
 # -----------------------------------------------------------------------------
 # 1. BASIC SETTINGS
@@ -975,7 +1007,7 @@ class InterferometerApp(ctk.CTk):
             )
         )
     # -----------------------------------------------------------------------------
-    # 5.6 READ STEP SIZE FROM THE UI
+    # 6.6 READ STEP SIZE FROM THE UI
     # -----------------------------------------------------------------------------
     
     def get_step_size(self):
@@ -988,14 +1020,14 @@ class InterferometerApp(ctk.CTk):
         except ValueError:
             return 0.0001 #safe default size when step size invalid
     # -----------------------------------------------------------------------------
-    # 5.7 CALCULATE FRINGE DISTANCE
+    # 6.7 CALCULATE FRINGE DISTANCE
     # -----------------------------------------------------------------------------
     
     def compute_fringe_distance(self, wavelength_nm):
 
         return (wavelength_nm / 2) / 1_000_000 / 2
     # -----------------------------------------------------------------------------
-    # 5.8 APPLY A NEW LASER WAVELENGTH
+    # 6.8 APPLY A NEW LASER WAVELENGTH
     # -----------------------------------------------------------------------------
     
     def apply_wavelength(self):
@@ -1030,7 +1062,7 @@ class InterferometerApp(ctk.CTk):
             text_color=GREEN_COLOR
         )
     # -----------------------------------------------------------------------------
-    # 5.9 STAGE BUTTON ACTIONS
+    # 6.9 STAGE BUTTON ACTIONS
     # -----------------------------------------------------------------------------
     
     def move_to_min(self):
@@ -1097,7 +1129,7 @@ class InterferometerApp(ctk.CTk):
 
         self.stage.stop()
     # -----------------------------------------------------------------------------
-    # 6.1 ENABLE OR DISABLE POSITION LOCK
+    # 7.1 ENABLE OR DISABLE POSITION LOCK
     # -----------------------------------------------------------------------------
     
     def toggle_lock(self):
@@ -1171,7 +1203,7 @@ class InterferometerApp(ctk.CTk):
             text_color=GREEN_COLOR
         )
     # -----------------------------------------------------------------------------
-    # 6.2 CLEAR POSITION LOCK
+    # 7.2 CLEAR POSITION LOCK
     # -----------------------------------------------------------------------------
     #return everything to unlock state
     def disable_lock(self, update_status=True):
@@ -1207,7 +1239,7 @@ class InterferometerApp(ctk.CTk):
                 text_color=TEXT_COLOR
             )
     # -----------------------------------------------------------------------------
-    # 6.3 LOCK TOLERANCE
+    # 7.3 LOCK TOLERANCE
     # -----------------------------------------------------------------------------
     
     #extremely small drift is ignored
@@ -1218,7 +1250,7 @@ class InterferometerApp(ctk.CTk):
             1e-7
         )
     # -----------------------------------------------------------------------------
-    # 6.4 CHECK WHETHER LOCK CORRECTION IS NEEDED
+    # 7.4 CHECK WHETHER LOCK CORRECTION IS NEEDED
     # -----------------------------------------------------------------------------
     #every time a fringe gets counted, this function gets called to check if the lock was active and correction is necessary
     def handle_lock_after_fringe(self):
@@ -1299,7 +1331,7 @@ class InterferometerApp(ctk.CTk):
             daemon=True
         ).start()
     # -----------------------------------------------------------------------------
-    # 6.5 FOLLOW THE LOCK CORRECTION MOVEMENT WITH UI  
+    # 7.5 FOLLOW THE LOCK CORRECTION MOVEMENT WITH UI  
     # -----------------------------------------------------------------------------
     #as long as the stage is moving as a correction, this method reads out the current position and finds out when its done moving
     def lock_correction_ui_loop(self):
@@ -1328,7 +1360,7 @@ class InterferometerApp(ctk.CTk):
             self.finish_lock_correction(p, r)
         )
     # -----------------------------------------------------------------------------
-    # 6.6 FINISH LOCK CORRECTION
+    # 7.6 FINISH LOCK CORRECTION
     # -----------------------------------------------------------------------------
     #after the correction movement is done, check if the lock position was reached and update the UI accordingly, also reset the fringe counting state 
     def finish_lock_correction(self, pos, remaining_mm):
@@ -1370,7 +1402,7 @@ class InterferometerApp(ctk.CTk):
                 text_color=ORANGE_COLOR
             )
     # -----------------------------------------------------------------------------
-    # 7.1 TRACK NORMAL STAGE MOVEMENT
+    # 8.1 TRACK NORMAL STAGE MOVEMENT
     # -----------------------------------------------------------------------------
     
     def stage_ui_loop(self):
@@ -1425,7 +1457,7 @@ class InterferometerApp(ctk.CTk):
                 self.move_to_center_after_calibration
             )
     # -----------------------------------------------------------------------------
-    # 7.2 SHOW INITIAL STAGE POSITION
+    # 8.2 SHOW INITIAL STAGE POSITION
     # -----------------------------------------------------------------------------
     #after calibration UI is filled with current stage position
     def update_stage_position_once(self):
@@ -1438,7 +1470,7 @@ class InterferometerApp(ctk.CTk):
                 text=f"Stage Position: {pos:.6f} mm"
             )
     # -----------------------------------------------------------------------------
-    # 7.3 UPDATE STAGE MOVEMENT DISPLAY
+    # 8.3 UPDATE STAGE MOVEMENT DISPLAY
     # -----------------------------------------------------------------------------
     
     def update_stage_labels(self, pos, moved, movement_base=None):
@@ -1468,7 +1500,7 @@ class InterferometerApp(ctk.CTk):
             current_total_stage_movement
         )
     # -----------------------------------------------------------------------------
-    # 7.4 RESET STAGE MOVEMENT TRACKING
+    # 8.4 RESET STAGE MOVEMENT TRACKING
     # -----------------------------------------------------------------------------
     
     def reset_stage_movement_tracking(self, pos=None):
@@ -1493,7 +1525,7 @@ class InterferometerApp(ctk.CTk):
 
         self.update_comparison_labels(0.0)
     # -----------------------------------------------------------------------------
-    # 7.5 RESET FRINGE MEASUREMENT DISPLAY
+    # 8.5 RESET FRINGE MEASUREMENT DISPLAY
     # -----------------------------------------------------------------------------
     
     def reset_measurement_after_calibration(self):
@@ -1519,7 +1551,7 @@ class InterferometerApp(ctk.CTk):
 
         self.update_comparison_labels(0.0)
     # -----------------------------------------------------------------------------
-    # 7.6 START RETURN AFTER CALIBRATION
+    # 8.6 START RETURN AFTER CALIBRATION
     # -----------------------------------------------------------------------------
     #return the stage to zero after calibration
     def finish_calibration_stage_reset(self):
@@ -1537,7 +1569,7 @@ class InterferometerApp(ctk.CTk):
             reset_after_move=True
         )
     # -----------------------------------------------------------------------------
-    # 7.7 MOVE STAGE DURING CALIBRATION
+    # 8.7 MOVE STAGE DURING CALIBRATION
     # -----------------------------------------------------------------------------
     
     def calibration_stage_motion(self):
@@ -1590,7 +1622,7 @@ class InterferometerApp(ctk.CTk):
                 self.start_pending_center_after_calibration
             )
     # -----------------------------------------------------------------------------
-    # 7.8 START PENDING RETURN AFTER CALIBRATION MOTION
+    # 8.8 START PENDING RETURN AFTER CALIBRATION MOTION
     # -----------------------------------------------------------------------------
 
     def start_pending_center_after_calibration(self):
@@ -1615,7 +1647,7 @@ class InterferometerApp(ctk.CTk):
         self.center_stage_after_calibration_pending = False
         self.move_to_center_after_calibration()
     # -----------------------------------------------------------------------------
-    # 7.9 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
+    # 8.9 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
     # -----------------------------------------------------------------------------
     
     def move_to_center_after_calibration(self):
@@ -1627,7 +1659,7 @@ class InterferometerApp(ctk.CTk):
             reset_after_move=True
         )
     # -----------------------------------------------------------------------------
-    # 7.10 FINISH CALIBRATION RESET
+    # 8.10 FINISH CALIBRATION RESET
     # -----------------------------------------------------------------------------
     #track the stage movement and reset
     def reset_stage_after_calibration(self, pos=None):
@@ -1640,7 +1672,7 @@ class InterferometerApp(ctk.CTk):
 
         self.start_calibration_button_cooldown()
     # -----------------------------------------------------------------------------
-    # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
+    # 8.11 UPDATE DRIVEN VS CALCULATED DISTANCE
     # -----------------------------------------------------------------------------
     #stage movement distance is compared with distance calculated from counted fringes
     def update_comparison_labels(self, driven_mm=None):
@@ -1681,7 +1713,7 @@ class InterferometerApp(ctk.CTk):
             )
         )
     # -----------------------------------------------------------------------------
-    # 8.1 CAMERA AND MEASUREMENT LOOP
+    # 9.1 CAMERA AND MEASUREMENT LOOP
     # -----------------------------------------------------------------------------
     
     def loop(self):
@@ -1849,7 +1881,7 @@ class InterferometerApp(ctk.CTk):
                 )
             )
     # -----------------------------------------------------------------------------
-    # 8.2 DETECT AND COUNT FRINGES
+    # 9.2 DETECT AND COUNT FRINGES
     # -----------------------------------------------------------------------------
     #a stable dark to bright transition is counted as one fringe
     def update_accumulated_fringes(
@@ -1913,7 +1945,7 @@ class InterferometerApp(ctk.CTk):
 
         return False
     # -----------------------------------------------------------------------------
-    # 8.3 SHOW CURRENT INTENSITY
+    # 9.3 SHOW CURRENT INTENSITY
     # -----------------------------------------------------------------------------
     #intensity display updates and briefly turns green when fringe is counted
     def update_intensity_label(
@@ -1940,7 +1972,7 @@ class InterferometerApp(ctk.CTk):
                 )
             )
     # -----------------------------------------------------------------------------
-    # 8.4 SHOW DISTANCE AND TIME DELAY
+    # 9.4 SHOW DISTANCE AND TIME DELAY
     # -----------------------------------------------------------------------------
     
     def update_values(
@@ -1960,7 +1992,7 @@ class InterferometerApp(ctk.CTk):
 
         self.update_comparison_labels()
     # -----------------------------------------------------------------------------
-    # 8.5 SHOW LIVE CAMERA IMAGE
+    # 9.5 SHOW LIVE CAMERA IMAGE
     # -----------------------------------------------------------------------------
     
     def update_image(self, img):
@@ -1994,7 +2026,7 @@ class InterferometerApp(ctk.CTk):
 
         self.image_label.image = ctk_img
     # -----------------------------------------------------------------------------
-    # 9.1 SHUT DOWN HARDWARE CLEANLY
+    # 10.1 SHUT DOWN HARDWARE CLEANLY
     # -----------------------------------------------------------------------------
     
     def on_close(self):
@@ -2015,7 +2047,7 @@ class InterferometerApp(ctk.CTk):
 
         self.destroy()
 # -----------------------------------------------------------------------------
-# 9. PROGRAM START
+# 10.2 PROGRAM START
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
