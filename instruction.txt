@@ -28,3 +28,9 @@ connecting the Hardware
 1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
 2. go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
 3. close both apps and then run the program
+
+
+
+if using photodiodes/front-back measurement
+1. download national instrument software https://www.ni.com/de/support/downloads/drivers/download.ni-daq-mx.html#590033
+2. python -m pip install nidaqmx or when still in conda environment  C:/Users/FIDOPA_3/anaconda3/python.exe -m pip install nidaqmx
