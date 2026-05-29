@@ -1670,7 +1670,7 @@ class InterferometerApp(ctk.CTk):
 
                         self.bright_threshold = (
                             max_val
-                            - value_range * 0.30
+                            - value_range * 0.40
                         )
 
                         self.calibrating = False

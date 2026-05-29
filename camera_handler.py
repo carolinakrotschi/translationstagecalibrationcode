@@ -1,4 +1,4 @@
-# TABLE OF CONTENTS FOR CAMERA_HANDLER_EXPL.PY
+# TABLE OF CONTENTS
 # 1. Imports
 # 2. Camera setup
 # 3. Camera connection
@@ -29,13 +29,13 @@ class CameraHandler:
         self.simulation_mode = False
 
         # ROI
-        self.roi_x = 754
-        self.roi_y = 464
+        self.roi_x = 748 #exactly the middle of a 1536x1152 px image
+        self.roi_y = 556
         self.roi_w = 40
         self.roi_h = 40
 
         # Camera Settings
-        self.exposure_us = 10 #in mykrometer
+        self.exposure_us = 20 #in mykrometer
         self.gain = 5
         self.black_level = 0
 
