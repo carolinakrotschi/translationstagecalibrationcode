@@ -72,6 +72,8 @@ REQUIRED_BRIGHT_FRAMES = 3
 FRINGE_COOLDOWN = 0.08
 #avoids rapid over correction in lock mode, by waiting at least this amount of time between corrections
 LOCK_CORRECTION_COOLDOWN = 0.20
+#after calibration, 2s cooldown so that no buttons can be pressed immediately
+CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -164,6 +166,7 @@ class InterferometerApp(ctk.CTk):
         self.center_stage_after_calibration_pending = False #stage has to center after calibration
         self.returning_stage_after_calibration = False #return stage after calibration
         self.calibration_motion_started = False #prevents starting the calibration more than once
+        self.calibration_button_cooldown_active = False
         #for stage locking
         self.lock_active = False #state of the position lock
         self.lock_position_mm = 0.0
@@ -550,9 +553,67 @@ class InterferometerApp(ctk.CTk):
 
         self.image_label.pack(pady=5)
 
+        self.all_buttons = [
+            self.btn,
+            self.restart_btn,
+            self.wavelength_button,
+            self.btn_target_abs,
+            self.btn_target_rel,
+            self.btn_min,
+            self.btn_left,
+            self.btn_center,
+            self.btn_right,
+            self.btn_max,
+            self.btn_lock
+        ]
+
         self.update_comparison_labels()#renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
 
         self.update_stage_position_once()#reads the current stage position and updates the label, this is important to have the correct position at the beginning
+    # -----------------------------------------------------------------------------
+    # 4.2 ENABLE OR DISABLE ALL BUTTONS
+    # -----------------------------------------------------------------------------
+
+    def set_buttons_enabled(self, enabled):
+
+        state = "normal" if enabled else "disabled"
+
+        for button in self.all_buttons:
+            button.configure(state=state)
+
+    def start_calibration_button_cooldown(self):
+
+        self.calibration_button_cooldown_active = True
+        self.set_buttons_enabled(False)
+
+        self.status.configure(
+            text="Calibration done - buttons locked for 2s",
+            text_color=ORANGE_COLOR
+        )
+
+        self.after(
+            CALIBRATION_BUTTON_COOLDOWN_MS,
+            self.finish_calibration_button_cooldown
+        )
+
+    def finish_calibration_button_cooldown(self):
+
+        self.calibration_button_cooldown_active = False
+        self.set_buttons_enabled(True)
+
+        if self.is_monitoring:
+
+            self.status.configure(
+                text="Monitoring running",
+                text_color=GREEN_COLOR
+            )
+
+        else:
+
+            self.status.configure(
+                text="Stopped",
+                text_color=TEXT_COLOR
+            )
     # -----------------------------------------------------------------------------
     # 5.1 START OR STOP MONITORING
     # -----------------------------------------------------------------------------
@@ -986,7 +1047,7 @@ class InterferometerApp(ctk.CTk):
 
     def move_to_center(self):
 
-        self.start_stage_move_to(
+        self.start_stage_move_to_stepped( #move to center button also goes in steps
             0.0
         )
 
@@ -1481,46 +1542,80 @@ class InterferometerApp(ctk.CTk):
     
     def calibration_stage_motion(self):
 
-        if not self.stage_connected: #refuse movement commands when stage is not connected
+        try:
+
+            if not self.stage_connected: #refuse movement commands when stage is not connected
+                return
+
+            start_pos = self.stage.get_position() #current stage position as movement start
+            step_mm = 0.0001
+            steps = 4
+
+            # move forward in 4 steps
+            for i in range(1, steps + 1):
+                if not self.is_monitoring: #stop calibration movement if monitoring is stopped
+                    return
+
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
+
+                if not self.stage.move_absolute(target):
+                    return
+
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
+
+                time.sleep(0.25)
+
+            # move back in 4 steps
+            for i in range(steps - 1, -1, -1):
+                if not self.is_monitoring:
+                    return
+
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
+
+                if not self.stage.move_absolute(target):
+                    return
+
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
+
+                time.sleep(0.25)
+
+        finally:
+
+            self.after(
+                0,
+                self.start_pending_center_after_calibration
+            )
+    # -----------------------------------------------------------------------------
+    # 7.8 START PENDING RETURN AFTER CALIBRATION MOTION
+    # -----------------------------------------------------------------------------
+
+    def start_pending_center_after_calibration(self):
+
+        if not self.center_stage_after_calibration_pending:
             return
 
-        start_pos = self.stage.get_position() #current stage position as movement start
-        step_mm = 0.0001
-        steps = 4
+        if not self.is_monitoring:
+            self.center_stage_after_calibration_pending = False
+            self.returning_stage_after_calibration = False
+            return
 
-        # move forward in 4 steps
-        for i in range(1, steps + 1):
-            if not self.is_monitoring: #stop calibration movement if monitoring is stopped
-                return
+        if self.stage_connected and self.stage.is_moving:
 
-            target = start_pos + step_mm * i
-            target = self.stage.clamp_position(target)
+            self.after(
+                100,
+                self.start_pending_center_after_calibration
+            )
 
-            if not self.stage.move_absolute(target):
-                return
+            return
 
-            while self.stage.is_moving and self.is_monitoring:
-                time.sleep(0.01)
-
-            time.sleep(0.25)
-
-        # move back in 4 steps
-        for i in range(steps - 1, -1, -1):
-            if not self.is_monitoring:
-                return
-
-            target = start_pos + step_mm * i
-            target = self.stage.clamp_position(target)
-
-            if not self.stage.move_absolute(target):
-                return
-
-            while self.stage.is_moving and self.is_monitoring:
-                time.sleep(0.01)
-
-            time.sleep(0.25)
+        self.center_stage_after_calibration_pending = False
+        self.move_to_center_after_calibration()
     # -----------------------------------------------------------------------------
-    # 7.8 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
+    # 7.9 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
     # -----------------------------------------------------------------------------
     
     def move_to_center_after_calibration(self):
@@ -1532,7 +1627,7 @@ class InterferometerApp(ctk.CTk):
             reset_after_move=True
         )
     # -----------------------------------------------------------------------------
-    # 7.9 FINISH CALIBRATION RESET
+    # 7.10 FINISH CALIBRATION RESET
     # -----------------------------------------------------------------------------
     #track the stage movement and reset
     def reset_stage_after_calibration(self, pos=None):
@@ -1543,12 +1638,9 @@ class InterferometerApp(ctk.CTk):
 
         self.returning_stage_after_calibration = False
 
-        self.status.configure(
-            text="Monitoring running",
-            text_color=GREEN_COLOR
-        )
+        self.start_calibration_button_cooldown()
     # -----------------------------------------------------------------------------
-    # 7.10 UPDATE DRIVEN VS CALCULATED DISTANCE
+    # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
     # -----------------------------------------------------------------------------
     #stage movement distance is compared with distance calculated from counted fringes
     def update_comparison_labels(self, driven_mm=None):
