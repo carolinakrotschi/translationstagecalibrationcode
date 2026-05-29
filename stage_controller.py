@@ -56,13 +56,18 @@ class StageController:
 
             self.device = GCSDevice() #creates PI controller object that will send commands to the stage
 
-            self.device.InterfaceSetupDlg() #user has to click ok for the PI controller
+            available_stages = self.device.EnumerateUSB() #instead that the user has to select the stage again (stage should already be initialized via PI MikroMove), this connects to the first available usb stage
 
-            self.connected = True
+            if not available_stages:
+                raise RuntimeError("No PI translation stage found via USB")
 
-            self.current_position = self.get_position()
+            self.device.ConnectUSB(available_stages[0]) #ATTENTION: dont connect multiple stages!
 
-            self.update_travel_limits()
+            self.current_position = self.read_device_position()
+
+            self.read_travel_limits()
+
+            self.connected = True #only set connection to true after connecting USB stage and reading limits, reading current position
 
             return True
 
@@ -72,32 +77,61 @@ class StageController:
 
             self.connected = False
 
+            if self.device is not None:
+
+                try:
+
+                    self.device.CloseConnection()
+
+                except Exception as close_error:
+
+                    print("Stage close error:", close_error)
+
+                self.device = None
+
             return False
 
     # -----------------------------------------------------------------------------
     # 3.2 READ HARDWARE TRAVEL LIMITS
     # -----------------------------------------------------------------------------
     
+    def read_travel_limits(self):
+
+        min_pos = self.device.qTMN(STAGE_AXIS)
+        #ask controller for minimum allowed position of stage axis
+
+        max_pos = self.device.qTMX(STAGE_AXIS)
+
+        self.min_position = float(min_pos[STAGE_AXIS])
+
+        self.max_position = float(max_pos[STAGE_AXIS])
+
     def update_travel_limits(self):
 
         try:
 
-            min_pos = self.device.qTMN(STAGE_AXIS)
-            #ask controller for minimum allowed position of stage axis
+            self.read_travel_limits()
 
-            max_pos = self.device.qTMX(STAGE_AXIS)
-
-            self.min_position = float(min_pos[STAGE_AXIS])
-
-            self.max_position = float(max_pos[STAGE_AXIS])
+            return True
 
         except Exception as e:
 
             print("Stage limit read error:", e)
 
+            return False
+
     # -----------------------------------------------------------------------------
     # 4.1 READ CURRENT STAGE POSITION
     # -----------------------------------------------------------------------------
+
+    def read_device_position(self):
+
+        pos = self.device.qPOS(STAGE_AXIS)
+        #ask controller for current stage position
+
+        return float(
+            pos[STAGE_AXIS]
+        )
     
     def get_position(self):
 
@@ -106,12 +140,7 @@ class StageController:
 
         try:
 
-            pos = self.device.qPOS(STAGE_AXIS)
-            #ask controller for current stage position
-
-            self.current_position = float(
-                pos[STAGE_AXIS]
-            )
+            self.current_position = self.read_device_position()
 
             return self.current_position
 
