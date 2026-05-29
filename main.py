@@ -16,7 +16,7 @@
 
 # the idea here is, that when the 5s calibration at the beginning doesnt work, the user can observe the intensities of a bright/dark fringe and manually insert them here
 MANUAL_THRESHOLDS = False
-# this can be manually set to True
+# this can be manually set to True and then the values can be manually adjusted
 MANUAL_DARK_THRESHOLD = 7
 MANUAL_BRIGHT_THRESHOLD = 25
 
