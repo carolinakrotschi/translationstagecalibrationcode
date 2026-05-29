@@ -11,6 +11,8 @@
 #https://www.ni.com/de/support/downloads/drivers/download.ni-daq-mx.html#590033
 
 
+
+
 import argparse
 import platform
 import sys
