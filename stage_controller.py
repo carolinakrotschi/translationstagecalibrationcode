@@ -56,7 +56,7 @@ class StageController:
 
             self.device = GCSDevice() #creates PI controller object that will send commands to the stage
 
-            self.device.InterfaceSetupDlg()
+            self.device.InterfaceSetupDlg() #user has to click ok for the PI controller
 
             self.connected = True
 
