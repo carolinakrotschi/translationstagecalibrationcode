@@ -6,8 +6,8 @@
 # 5. Monitoring and reset
 # 6. Translation stage control
 # 7. Lock function
-# 8. Calibration and comparison
-# 9. Camera loop and analysis
+# 8. Calibration 
+# 9. Camera loop
 # 10. Cleanup and program start
 
 # -----------------------------------------------------------------------------
