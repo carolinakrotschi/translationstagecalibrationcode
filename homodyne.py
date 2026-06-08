@@ -2,11 +2,19 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+import numpy as np
 
 try:
     import customtkinter as ctk
 except ImportError:
     ctk = None
+
+try:
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+except ImportError:
+    plt = None
+    FigureCanvasTkAgg = None
 
 try:
     from stage_controller import StageController
@@ -20,8 +28,9 @@ else:
 # Default NI inputs from NI.py. S1 is the cosine signal, S2 the sine signal.
 PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"
 PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"
+REFERENCE_CHANNEL = "Dev1/ai2"
 
-LASER_WAVELENGTH_NM = 1576.3
+LASER_WAVELENGTH_NM = 780.0
 
 # If the displayed direction is inverted in the real setup, set this to -1.
 PHASE_DIRECTION_SIGN = 1
@@ -47,7 +56,7 @@ ORANGE_COLOR = "#D35400"
 
 
 def compute_fringe_distance_mm(wavelength_nm):
-    return (wavelength_nm / 2) / 1_000_000 / 2
+    return (wavelength_nm / 2) / 1_000_000 
 
 
 def wrap_to_pi(angle_rad):
@@ -67,6 +76,7 @@ class HomodyneSample:
     timestamp: float
     raw_s1: float
     raw_s2: float
+    raw_ref: float
     s1: float
     s2: float
     radius: float
@@ -84,10 +94,12 @@ class NIPhotodiodeReader:
     def __init__(
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
-        channel_s2=PHOTODIODE_CHANNEL_S2
+        channel_s2=PHOTODIODE_CHANNEL_S2,
+        channel_ref=REFERENCE_CHANNEL
     ):
         self.channel_s1 = channel_s1
         self.channel_s2 = channel_s2
+        self.channel_ref = channel_ref
         self.task = None
         self.nidaqmx = None
 
@@ -98,6 +110,7 @@ class NIPhotodiodeReader:
         self.task = nidaqmx.Task()
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s1)
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s2)
+        self.task.ai_channels.add_ai_voltage_chan(self.channel_ref)
         return True
 
     def read(self):
@@ -106,12 +119,12 @@ class NIPhotodiodeReader:
 
         values = self.task.read()
 
-        if len(values) != 2:
+        if len(values) != 3:
             raise RuntimeError(
-                "Expected two analog input values from the NI task."
+                "Expected three analog input values from the NI task."
             )
 
-        return float(values[0]), float(values[1])
+        return float(values[0]), float(values[1]), float(values[2])
 
     def close(self):
         if self.task is not None:
@@ -132,8 +145,10 @@ class HomodyneQuadratureCounter:
 
         self.offset_s1 = 0.0
         self.offset_s2 = 0.0
+        self.offset_ref = 0.0
         self.scale_s1 = 1.0
         self.scale_s2 = 1.0
+        self.scale_ref = 1.0
 
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
@@ -146,18 +161,24 @@ class HomodyneQuadratureCounter:
 
         s1_values = [sample[0] for sample in raw_samples]
         s2_values = [sample[1] for sample in raw_samples]
+        ref_values = [sample[2] for sample in raw_samples]
 
         self.offset_s1 = (min(s1_values) + max(s1_values)) / 2
         self.offset_s2 = (min(s2_values) + max(s2_values)) / 2
+        self.offset_ref = (min(ref_values) + max(ref_values)) / 2
 
         self.scale_s1 = (max(s1_values) - min(s1_values)) / 2
         self.scale_s2 = (max(s2_values) - min(s2_values)) / 2
+        self.scale_ref = (max(ref_values) - min(ref_values)) / 2
 
         if self.scale_s1 <= 1e-12:
             self.scale_s1 = 1.0
 
         if self.scale_s2 <= 1e-12:
             self.scale_s2 = 1.0
+
+        if self.scale_ref <= 1e-12:
+            self.scale_ref = 1.0
 
         self.reset()
 
@@ -172,7 +193,7 @@ class HomodyneQuadratureCounter:
         s2 = (raw_s2 - self.offset_s2) / self.scale_s2
         return s1, s2
 
-    def update(self, raw_s1, raw_s2):
+    def update(self, raw_s1, raw_s2, raw_ref):
         timestamp = time.time()
         s1, s2 = self.normalize(raw_s1, raw_s2)
         radius = math.hypot(s1, s2)
@@ -182,6 +203,7 @@ class HomodyneQuadratureCounter:
                 timestamp=timestamp,
                 raw_s1=raw_s1,
                 raw_s2=raw_s2,
+                raw_ref=raw_ref,
                 s1=s1,
                 s2=s2,
                 radius=radius,
@@ -227,6 +249,7 @@ class HomodyneQuadratureCounter:
             timestamp=timestamp,
             raw_s1=raw_s1,
             raw_s2=raw_s2,
+            raw_ref=raw_ref,
             s1=s1,
             s2=s2,
             radius=radius,
@@ -264,11 +287,12 @@ class HomodyneMonitor:
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
         channel_s2=PHOTODIODE_CHANNEL_S2,
+        channel_ref=REFERENCE_CHANNEL,
         wavelength_nm=LASER_WAVELENGTH_NM,
         phase_direction_sign=PHASE_DIRECTION_SIGN
     ):
         fringe_distance_mm = compute_fringe_distance_mm(wavelength_nm)
-        self.reader = NIPhotodiodeReader(channel_s1, channel_s2)
+        self.reader = NIPhotodiodeReader(channel_s1, channel_s2, channel_ref)
         self.counter = HomodyneQuadratureCounter(
             phase_direction_sign=phase_direction_sign,
             fringe_distance_mm=fringe_distance_mm
@@ -300,8 +324,8 @@ class HomodyneMonitor:
         return samples
 
     def read(self):
-        raw_s1, raw_s2 = self.reader.read()
-        return self.counter.update(raw_s1, raw_s2)
+        raw_s1, raw_s2, raw_ref = self.reader.read()
+        return self.counter.update(raw_s1, raw_s2, raw_ref)
 
     def close(self):
         self.reader.close()
@@ -321,6 +345,17 @@ class HomodyneGui:
         self.root.geometry("700x900")
         self.root.configure(fg_color="white")
 
+        self.scroll = ctk.CTkScrollableFrame(
+            self.root,
+            fg_color="white"
+        )
+        self.scroll.pack(
+            fill="both",
+            expand=True,
+            padx=2,
+            pady=2
+        )
+
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
         self.fringe_distance_mm = compute_fringe_distance_mm(
             self.laser_wavelength_nm
@@ -332,6 +367,14 @@ class HomodyneGui:
         )
         self.monitoring = False
         self.measurement_thread = None
+        self.raw_s1_history = []
+        self.raw_s2_history = []
+        self.raw_ref_history = []
+        self.normalized_s1_history = []
+        self.normalized_s2_history = []
+        self.normalized_ref_history = []
+        self.stage_position_history = []
+        self.time_history = []
 
         self.stage = StageController() if StageController is not None else None
         self.stage_connected = False
@@ -355,21 +398,21 @@ class HomodyneGui:
 
     def build_ui(self):
         ctk.CTkLabel(
-            self.root,
+            self.scroll,
             text="Homodyne Quadrature Monitor",
             font=("Arial", 23, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(16, 8))
 
         self.status = ctk.CTkLabel(
-            self.root,
+            self.scroll,
             text="Status: stopped",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
         self.status.pack(pady=(0, 12))
 
-        control_frame = ctk.CTkFrame(self.root, fg_color="#EEEEEE")
+        control_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
         control_frame.pack(fill="x", padx=18, pady=8)
 
         self.btn_start = ctk.CTkButton(
@@ -392,7 +435,17 @@ class HomodyneGui:
         )
         self.btn_lock.grid(row=0, column=1, padx=12, pady=14)
 
-        settings_frame = ctk.CTkFrame(self.root, fg_color="#EEEEEE")
+        self.btn_reset = ctk.CTkButton(
+            control_frame,
+            text="RESET",
+            width=140,
+            command=self.reset_monitor,
+            fg_color=ORANGE_COLOR,
+            font=("Arial", 12, "bold")
+        )
+        self.btn_reset.grid(row=0, column=2, padx=12, pady=14)
+
+        settings_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
         settings_frame.pack(fill="x", padx=18, pady=8)
 
         ctk.CTkLabel(
@@ -487,23 +540,38 @@ class HomodyneGui:
         self.btn_stage_step_negative = ctk.CTkButton(
             step_button_row,
             text="STEP -",
-            width=110,
+            width=90,
             command=lambda: self.move_stage_step(-1),
             fg_color=TEXT_COLOR
         )
         self.btn_stage_step_negative.grid(row=0, column=0, padx=5)
 
+        self.btn_stage_center = ctk.CTkButton(
+            step_button_row,
+            text="0",
+            width=90,
+            command=self.move_stage_to_center,
+            fg_color=TEXT_COLOR
+        )
+        self.btn_stage_center.grid(row=0, column=1, padx=5)
+
         self.btn_stage_step_positive = ctk.CTkButton(
             step_button_row,
             text="STEP +",
-            width=110,
+            width=90,
             command=lambda: self.move_stage_step(1),
             fg_color=TEXT_COLOR
         )
-        self.btn_stage_step_positive.grid(row=0, column=1, padx=5)
+        self.btn_stage_step_positive.grid(row=0, column=2, padx=5)
 
-        values_frame = ctk.CTkFrame(self.root, fg_color="#EEEEEE")
-        values_frame.pack(fill="x", padx=18, pady=8)
+        row_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        row_frame.pack(fill="x", padx=18, pady=8)
+
+        values_frame = ctk.CTkFrame(row_frame, fg_color="#EEEEEE")
+        values_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        lock_frame = ctk.CTkFrame(row_frame, fg_color="#EEEEEE")
+        lock_frame.pack(side="left", fill="both", expand=True, padx=(8, 0))
 
         self.label_phase = self.make_value_label(
             values_frame,
@@ -530,9 +598,6 @@ class HomodyneGui:
             "Distance",
             "0.000000 um / 0.000000000 mm"
         )
-
-        lock_frame = ctk.CTkFrame(self.root, fg_color="#EEEEEE")
-        lock_frame.pack(fill="x", padx=18, pady=8)
 
         ctk.CTkLabel(
             lock_frame,
@@ -591,14 +656,89 @@ class HomodyneGui:
 
         channel_text = (
             f"Channels: S1={PHOTODIODE_CHANNEL_S1}, "
-            f"S2={PHOTODIODE_CHANNEL_S2}"
+            f"S2={PHOTODIODE_CHANNEL_S2}, "
+            f"Ref={REFERENCE_CHANNEL}"
         )
         ctk.CTkLabel(
-            self.root,
+            self.scroll,
             text=channel_text,
             font=("Arial", 10),
             text_color=TEXT_COLOR
         ).pack(pady=(8, 0))
+
+        plot_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
+        plot_frame.pack(fill="both", padx=18, pady=(8, 16), expand=True)
+
+        ctk.CTkLabel(
+            plot_frame,
+            text="Live outputs",
+            font=("Arial", 15, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(10, 4))
+
+        if plt is None or FigureCanvasTkAgg is None:
+            ctk.CTkLabel(
+                plot_frame,
+                text="Matplotlib is required for live plotting.",
+                font=("Arial", 11),
+                text_color=RED_COLOR
+            ).pack(pady=8)
+            self.plot_canvas = None
+            self.plot_axes = None
+        else:
+            self.plot_figure = plt.Figure(figsize=(8, 7), dpi=100)
+            gs = self.plot_figure.add_gridspec(4, 2, height_ratios=[1, 1, 1, 1.2], hspace=0.45, wspace=0.35)
+
+            self.plot_axes = np.empty((3, 2), dtype=object)
+            self.plot_axes[0, 0] = self.plot_figure.add_subplot(gs[0, 0])
+            self.plot_axes[1, 0] = self.plot_figure.add_subplot(gs[1, 0])
+            self.plot_axes[2, 0] = self.plot_figure.add_subplot(gs[2, 0])
+            self.plot_axes[0, 1] = self.plot_figure.add_subplot(gs[0, 1])
+            self.plot_axes[1, 1] = self.plot_figure.add_subplot(gs[1, 1])
+            self.plot_axes[2, 1] = self.plot_figure.add_subplot(gs[2, 1])
+            self.scatter_axis = self.plot_figure.add_subplot(gs[3, :])
+
+            self.plot_axes[0, 0].set_title("S1 raw")
+            self.plot_axes[1, 0].set_title("S2 raw")
+            self.plot_axes[2, 0].set_title("Ref raw")
+            self.plot_axes[0, 1].set_title("S1 normalized vs stage")
+            self.plot_axes[1, 1].set_title("S2 normalized vs stage")
+            self.plot_axes[2, 1].set_title("Ref normalized vs stage")
+            self.scatter_axis.set_title("Normalized S1 vs S2 scatter")
+
+            for ax in self.plot_axes.flatten():
+                ax.grid(True, linestyle=':', alpha=0.6)
+
+            self.scatter_axis.grid(True, linestyle=':', alpha=0.6)
+
+            self.plot_axes[0, 0].set_ylabel("Voltage")
+            self.plot_axes[1, 0].set_ylabel("Voltage")
+            self.plot_axes[2, 0].set_ylabel("Voltage")
+            self.plot_axes[0, 1].set_ylabel("Normalized")
+            self.plot_axes[1, 1].set_ylabel("Normalized")
+            self.plot_axes[2, 1].set_ylabel("Normalized")
+            self.scatter_axis.set_xlabel("S1 normalized")
+            self.scatter_axis.set_ylabel("S2 normalized")
+
+            self.plot_axes[2, 0].set_xlabel("Samples")
+            self.plot_axes[2, 1].set_xlabel("Stage position (mm)")
+
+            self.plot_lines = {
+                'S1_raw': self.plot_axes[0, 0].plot([], [], color='blue')[0],
+                'S2_raw': self.plot_axes[1, 0].plot([], [], color='green')[0],
+                'Ref_raw': self.plot_axes[2, 0].plot([], [], color='red')[0],
+                'S1_norm': self.plot_axes[0, 1].plot([], [], color='blue', linestyle='-')[0],
+                'S2_norm': self.plot_axes[1, 1].plot([], [], color='green', linestyle='-')[0],
+                'Ref_norm': self.plot_axes[2, 1].plot([], [], color='red', linestyle='-')[0]
+            }
+            self.scatter_plot = self.scatter_axis.scatter([], [], color='purple', alpha=0.6, s=15)
+            self.plot_figure.tight_layout()
+            self.plot_canvas = FigureCanvasTkAgg(
+                self.plot_figure,
+                master=plot_frame
+            )
+            self.plot_canvas.draw()
+            self.plot_canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
 
     def make_value_label(self, parent, name, initial_value):
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -739,6 +879,14 @@ class HomodyneGui:
         self.latest_sample = None
         self.latest_distance_mm = None
         self.last_error_text = None
+        self.raw_s1_history = []
+        self.raw_s2_history = []
+        self.raw_ref_history = []
+        self.normalized_s1_history = []
+        self.normalized_s2_history = []
+        self.normalized_ref_history = []
+        self.stage_position_history = []
+        self.time_history = []
         self.disable_lock(update_status=False)
 
         self.btn_start.configure(
@@ -869,41 +1017,7 @@ class HomodyneGui:
             return
 
         current_position_mm = self.stage.get_position()
-        target_position_mm = self.stage.clamp_position(
-            current_position_mm + direction * self.stage_step_mm
-        )
-        actual_step_mm = target_position_mm - current_position_mm
-
-        if abs(actual_step_mm) < 1e-12:
-            self.status.configure(
-                text="Status: stage step blocked by travel limit",
-                text_color=RED_COLOR
-            )
-            return
-
-        if not self.stage.move_absolute(target_position_mm):
-            self.status.configure(
-                text="Status: stage step failed",
-                text_color=RED_COLOR
-            )
-            return
-
-        self.label_stage_status.configure(
-            text=f"Stage: stepping {actual_step_mm:+.9f} mm",
-            text_color=ORANGE_COLOR
-        )
-        self.label_stage_position.configure(
-            text=f"Stage target: {target_position_mm:.9f} mm"
-        )
-        self.status.configure(
-            text=f"Status: stage stepping {actual_step_mm:+.9f} mm",
-            text_color=ORANGE_COLOR
-        )
-
-        threading.Thread(
-            target=self.manual_stage_move_worker,
-            daemon=True
-        ).start()
+        self.start_stage_move_by_steps(direction * self.stage_step_mm)
 
     def manual_stage_move_worker(self):
         while self.stage is not None and self.stage.is_moving:
@@ -946,6 +1060,255 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
+    def move_stage_to_center(self):
+        if self.lock_active:
+            self.status.configure(
+                text="Status: unlock before manual stage movement",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        if self.stage is None:
+            self.label_stage_status.configure(
+                text=f"Stage: unavailable ({STAGE_IMPORT_ERROR})",
+                text_color=RED_COLOR
+            )
+            return
+
+        if not self.stage_connected:
+            self.start_stage_connection()
+            self.status.configure(
+                text="Status: wait for stage connection",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        if self.stage.is_moving or self.lock_correction_active:
+            self.status.configure(
+                text="Status: stage is already moving",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        self.start_stage_move_to_stepped(0.0)
+
+    def start_stage_move_to_stepped(self, target_mm):
+        if self.stage is None or not self.stage_connected:
+            self.label_stage_status.configure(
+                text=f"Stage: unavailable ({STAGE_IMPORT_ERROR})",
+                text_color=RED_COLOR
+            )
+            self.status.configure(
+                text="Status: stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
+        if self.lock_active:
+            self.status.configure(
+                text="Status: unlock before manual stage movement",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        if self.stage.is_moving:
+            self.status.configure(
+                text="Status: stage is already moving",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        start_pos = self.stage.get_position()
+        target_mm = self.stage.clamp_position(target_mm)
+
+        if abs(target_mm - start_pos) < 1e-12:
+            self.status.configure(
+                text="Status: stage already at target",
+                text_color=TEXT_COLOR
+            )
+            self.label_stage_position.configure(
+                text=f"Stage position: {start_pos:.9f} mm"
+            )
+            return
+
+        threading.Thread(
+            target=self.stage_stepped_move_worker,
+            args=(start_pos, target_mm),
+            daemon=True
+        ).start()
+
+    def start_stage_move_by_steps(self, move_mm):
+        if self.stage is None or not self.stage_connected:
+            self.status.configure(
+                text="Status: stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
+        self.start_stage_move_to_stepped(
+            self.stage.get_position() + move_mm
+        )
+
+    def perform_post_calibration_scan(self, steps=30, pause_s=0.05):
+        if self.stage is None or not self.stage_connected:
+            self.root.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Status: stage not available for post-calibration scan",
+                    text_color=ORANGE_COLOR
+                )
+            )
+            return
+
+        if self.lock_active or self.lock_correction_active or self.stage.is_moving:
+            self.root.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Status: cannot run post-calibration scan while lock or move is active",
+                    text_color=ORANGE_COLOR
+                )
+            )
+            return
+
+        self.root.after(
+            0,
+            lambda:
+            self.status.configure(
+                text=f"Status: running {steps} post-calibration steps",
+                text_color=TEXT_COLOR
+            )
+        )
+
+        for step_index in range(steps):
+            if not self.monitoring:
+                break
+
+            current_pos = self.stage.get_position()
+            if current_pos is None:
+                break
+
+            target_pos = self.stage.clamp_position(
+                current_pos + self.stage_step_mm
+            )
+
+            if abs(target_pos - current_pos) < 1e-12:
+                break
+
+            if not self.stage.move_absolute(target_pos):
+                self.root.after(
+                    0,
+                    lambda:
+                    self.status.configure(
+                        text="Status: stage move failed during sweep",
+                        text_color=RED_COLOR
+                    )
+                )
+                break
+
+            while self.stage.is_moving and self.monitoring:
+                try:
+                    sample = self.monitor.read()
+                    distance_mm = self.monitor.counter.signed_distance_mm()
+                except Exception:
+                    sample = None
+                    distance_mm = None
+
+                if sample is not None:
+                    self.root.after(
+                        0,
+                        lambda s=sample, d=distance_mm:
+                        self.update_sample_display(s, d)
+                    )
+
+                time.sleep(SAMPLE_INTERVAL_S)
+
+            position_mm = self.stage.get_position()
+            self.root.after(
+                0,
+                lambda p=position_mm:
+                self.label_stage_position.configure(
+                    text=f"Stage position: {p:.9f} mm"
+                ) if p is not None else None
+            )
+
+            if not self.monitoring:
+                break
+
+            time.sleep(pause_s)
+
+        self.root.after(
+            0,
+            lambda:
+            self.status.configure(
+                text="Status: post-calibration scan complete",
+                text_color=GREEN_COLOR
+            )
+        )
+
+    def stage_stepped_move_worker(self, start_pos, target_mm):
+        step_mm = abs(self.stage_step_mm)
+        if step_mm <= 0:
+            step_mm = 1e-6
+
+        delay_s = 0.25
+        direction = 1 if target_mm > start_pos else -1
+        current_pos = start_pos
+        remaining = abs(target_mm - start_pos)
+
+        self.root.after(
+            0,
+            lambda:
+            self.status.configure(
+                text=(
+                    f"Moving to {target_mm:.9f} mm in {step_mm:.9f} mm steps"
+                ),
+                text_color=TEXT_COLOR
+            )
+        )
+
+        while remaining > 1e-12:
+            next_step = min(step_mm, remaining)
+            next_target = current_pos + direction * next_step
+
+            if not self.stage.move_absolute(next_target):
+                self.root.after(
+                    0,
+                    lambda:
+                    self.status.configure(
+                        text="Status: stage move failed",
+                        text_color=RED_COLOR
+                    )
+                )
+                return
+
+            while self.stage.is_moving:
+                time.sleep(0.01)
+
+            current_pos = next_target
+            remaining = abs(target_mm - current_pos)
+
+            self.root.after(
+                0,
+                lambda p=current_pos:
+                self.label_stage_position.configure(
+                    text=f"Stage position: {p:.9f} mm"
+                )
+            )
+
+            if remaining > 1e-12:
+                time.sleep(delay_s)
+
+        self.root.after(
+            0,
+            lambda:
+            self.status.configure(
+                text=f"Reached {current_pos:.9f} mm",
+                text_color=GREEN_COLOR
+            )
+        )
+
     def measurement_loop(self):
         try:
             self.monitor.connect()
@@ -978,6 +1341,8 @@ class HomodyneGui:
                 )
             )
 
+            self.perform_post_calibration_scan(steps=10, pause_s=0.05)
+
             while self.monitoring:
                 sample = self.monitor.read()
                 distance_mm = self.monitor.counter.signed_distance_mm()
@@ -1006,6 +1371,41 @@ class HomodyneGui:
     def update_sample_display(self, sample, distance_mm):
         self.latest_sample = sample
         self.latest_distance_mm = distance_mm
+
+        self.raw_s1_history.append(sample.raw_s1)
+        self.raw_s2_history.append(sample.raw_s2)
+        self.raw_ref_history.append(sample.raw_ref)
+        self.time_history.append(sample.timestamp)
+
+        normalized_s1 = sample.raw_s1 - self.monitor.counter.offset_s1
+        normalized_s2 = sample.raw_s2 - self.monitor.counter.offset_s2
+        normalized_ref = sample.raw_ref - self.monitor.counter.offset_ref
+
+        self.normalized_s1_history.append(normalized_s1)
+        self.normalized_s2_history.append(normalized_s2)
+        self.normalized_ref_history.append(normalized_ref)
+
+        position_mm = None
+        if self.stage is not None and self.stage_connected:
+            try:
+                position_mm = self.stage.get_position()
+                self.stage_position_mm = position_mm
+            except Exception:
+                position_mm = self.stage_position_mm
+
+        self.stage_position_history.append(position_mm if position_mm is not None else float('nan'))
+
+        if len(self.raw_s1_history) > 300:
+            self.raw_s1_history.pop(0)
+            self.raw_s2_history.pop(0)
+            self.raw_ref_history.pop(0)
+            self.normalized_s1_history.pop(0)
+            self.normalized_s2_history.pop(0)
+            self.normalized_ref_history.pop(0)
+            self.stage_position_history.pop(0)
+            self.time_history.pop(0)
+
+        self.update_plot()
 
         self.label_phase.configure(
             text=f"{sample.unwrapped_phase_rad:+.5f} rad"
@@ -1315,6 +1715,87 @@ class HomodyneGui:
                 text="Status: stopped",
                 text_color=TEXT_COLOR
             )
+
+    def reset_monitor(self):
+        self.monitor.counter.reset()
+        self.latest_sample = None
+        self.latest_distance_mm = None
+        self.raw_s1_history = []
+        self.raw_s2_history = []
+        self.raw_ref_history = []
+        self.normalized_s1_history = []
+        self.normalized_s2_history = []
+        self.normalized_ref_history = []
+        self.stage_position_history = []
+        self.time_history = []
+
+        self.label_phase.configure(text="0.00000 rad")
+        self.label_fringe_position.configure(text="0.0000")
+        self.label_fringes.configure(text="0")
+        self.label_direction.configure(text="none")
+        self.label_distance.configure(text="n/a")
+        self.label_lock_status.configure(text="Lock: off", text_color=TEXT_COLOR)
+        self.label_lock_reference.configure(text="Reference: n/a")
+        self.label_lock_drift.configure(text="Drift: n/a")
+        self.label_lock_correction.configure(text="Correction to lock: n/a", text_color=TEXT_COLOR)
+
+        self.disable_lock(update_status=False)
+        self.update_plot(reset=True)
+
+        if not self.monitoring:
+            self.status.configure(
+                text="Status: reset",
+                text_color=TEXT_COLOR
+            )
+
+    def update_plot(self, reset=False):
+        if self.plot_axes is None:
+            return
+
+        if reset:
+            for key in self.plot_lines:
+                self.plot_lines[key].set_data([], [])
+            self.scatter_plot.set_offsets(np.empty((0, 2)))
+            for ax in self.plot_axes.flatten():
+                ax.relim()
+                ax.autoscale_view()
+            self.scatter_axis.relim()
+            self.scatter_axis.autoscale_view()
+            self.plot_canvas.draw_idle()
+            return
+
+        x = list(range(len(self.raw_s1_history)))
+        self.plot_lines['S1_raw'].set_data(x, self.raw_s1_history)
+        self.plot_lines['S2_raw'].set_data(x, self.raw_s2_history)
+        self.plot_lines['Ref_raw'].set_data(x, self.raw_ref_history)
+
+        self.plot_lines['S1_norm'].set_data(
+            self.stage_position_history,
+            self.normalized_s1_history
+        )
+        self.plot_lines['S2_norm'].set_data(
+            self.stage_position_history,
+            self.normalized_s2_history
+        )
+        self.plot_lines['Ref_norm'].set_data(
+            self.stage_position_history,
+            self.normalized_ref_history
+        )
+
+        scatter_points = np.column_stack(
+            (
+                self.normalized_s1_history,
+                self.normalized_s2_history
+            )
+        ) if self.normalized_s1_history and self.normalized_s2_history else np.empty((0, 2))
+        self.scatter_plot.set_offsets(scatter_points)
+
+        for ax in self.plot_axes.flatten():
+            ax.relim()
+            ax.autoscale_view()
+        self.scatter_axis.relim()
+        self.scatter_axis.autoscale_view()
+        self.plot_canvas.draw_idle()
 
     def on_close(self):
         self.monitoring = False
