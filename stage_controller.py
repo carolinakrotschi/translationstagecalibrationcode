@@ -4,7 +4,7 @@
 # 3. Connection and limits
 # 4. Position helpers
 # 5. Movement commands
-# 6. Safety and cleanup
+# 6. Cleanup
 
 
 # -----------------------------------------------------------------------------
@@ -262,6 +262,22 @@ class StageController:
             self.min_position
         )
     # -----------------------------------------------------------------------------
+    # 5.5 SET ZERO POSITION
+    # -----------------------------------------------------------------------------
+    
+    def set_zero_position(self):
+        """Set the current position as zero reference"""
+        try:
+            if not self.connected:
+                return False
+            
+            # Set the controller's position reference to 0.0
+            self.device.POS(STAGE_AXIS, 0.0)
+            self.current_position = 0.0
+            return True
+        except Exception as e:
+            print("Set zero position error:", e)
+            return False
     # 5.7 UPDATE STEP SIZE
     # -----------------------------------------------------------------------------
     #user provided step size
