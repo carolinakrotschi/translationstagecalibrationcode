@@ -46,11 +46,11 @@ if os.path.exists(dll_path): #if the path is there (which it should), windows is
 # 3. PHYSICAL CONSTANTS
 # -----------------------------------------------------------------------------
 
-LASER_WAVELENGTH_NM = 1576.3
+LASER_WAVELENGTH_NM = 780.0
 
 #this calculates the fringe distance in mm based on the known formula
 FRINGE_DISTANCE_MM = (
-    (LASER_WAVELENGTH_NM / 2) / 1_000_000/2 
+    (LASER_WAVELENGTH_NM / 2) / 1_000_000
     #1000000 is from nm to mm
     #second division by 2 is because in a Michelson interferometer, the stage movement causes a change in path length that is twice the stage movement, so the fringe distance corresponds to half the wavelength of the laser light
 )
@@ -241,7 +241,7 @@ class InterferometerApp(ctk.CTk):
         )
 
         self.wavelength_entry.pack(pady=1)
-        #writes the default wavelenght into entry field (1576.3nm)
+        #writes the default wavelenght into entry field (780nm)
         self.wavelength_entry.insert(0, f"{self.laser_wavelength_nm:.1f}")
 
         self.wavelength_button = ctk.CTkButton(

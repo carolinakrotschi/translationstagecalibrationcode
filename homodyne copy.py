@@ -29,7 +29,7 @@ PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"
 PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"
 REFERENCE_CHANNEL = "Dev1/ai2"
 
-LASER_WAVELENGTH_NM = 780.0
+LASER_WAVELENGTH_NM = 787.3
 
 # If the displayed direction is inverted in the real setup, set this to -1.
 PHASE_DIRECTION_SIGN = 1
@@ -768,21 +768,38 @@ class HomodyneGui:
             ).pack(pady=8)
             self.plot_canvas = None
             self.plot_axis = None
+            self.plot_axes = None
         else:
-            self.plot_figure = plt.Figure(figsize=(8, 3.2), dpi=100)
-            self.plot_axis = self.plot_figure.add_subplot(111)
-
-            self.plot_axis.set_title("Raw voltage")
-            self.plot_axis.grid(True, linestyle=':', alpha=0.6)
-            self.plot_axis.set_ylabel("Voltage")
-            self.plot_axis.set_xlabel("Samples")
-
-            self.plot_lines = {
-                'S1_raw': self.plot_axis.plot([], [], color='blue', label='S1')[0],
-                'S2_raw': self.plot_axis.plot([], [], color='green', label='S2')[0],
-                'Ref_raw': self.plot_axis.plot([], [], color='red', label='Ref')[0]
+            self.plot_figure = plt.Figure(figsize=(8, 5.6), dpi=100)
+            axes = self.plot_figure.subplots(3, 1, sharex=True)
+            self.plot_axis = axes[0]
+            self.plot_axes = {
+                'S1_raw': axes[0],
+                'S2_raw': axes[1],
+                'Ref_raw': axes[2]
             }
-            self.plot_axis.legend(loc="upper right")
+
+            plot_specs = {
+                'S1_raw': ("S1 raw voltage", 'blue', 'S1'),
+                'S2_raw': ("S2 raw voltage", 'green', 'S2'),
+                'Ref_raw': ("Reference raw voltage", 'red', 'Ref')
+            }
+
+            self.plot_lines = {}
+            for key, axis in self.plot_axes.items():
+                title, color, label = plot_specs[key]
+                axis.set_title(title)
+                axis.grid(True, linestyle=':', alpha=0.6)
+                axis.set_ylabel("Voltage")
+                self.plot_lines[key] = axis.plot(
+                    [],
+                    [],
+                    color=color,
+                    label=label
+                )[0]
+                axis.legend(loc="upper right")
+
+            axes[-1].set_xlabel("Samples")
             self.plot_figure.tight_layout()
             self.plot_canvas = FigureCanvasTkAgg(
                 self.plot_figure,
@@ -2233,24 +2250,32 @@ class HomodyneGui:
             )
 
     def update_plot(self, reset=False):
-        if self.plot_axis is None:
+        if self.plot_axes is None:
             return
 
         if reset:
             for key in self.plot_lines:
                 self.plot_lines[key].set_data([], [])
-            self.plot_axis.relim()
-            self.plot_axis.autoscale_view()
+
+            for axis in self.plot_axes.values():
+                axis.relim()
+                axis.autoscale_view()
+
             self.plot_canvas.draw_idle()
             return
 
         x = list(range(len(self.raw_s1_history)))
-        self.plot_lines['S1_raw'].set_data(x, self.raw_s1_history)
-        self.plot_lines['S2_raw'].set_data(x, self.raw_s2_history)
-        self.plot_lines['Ref_raw'].set_data(x, self.raw_ref_history)
+        plot_data = {
+            'S1_raw': self.raw_s1_history,
+            'S2_raw': self.raw_s2_history,
+            'Ref_raw': self.raw_ref_history
+        }
 
-        self.plot_axis.relim()
-        self.plot_axis.autoscale_view()
+        for key, values in plot_data.items():
+            self.plot_lines[key].set_data(x, values)
+            self.plot_axes[key].relim()
+            self.plot_axes[key].autoscale_view()
+
         self.plot_canvas.draw_idle()
 
     def on_close(self):
