@@ -52,7 +52,6 @@ STAGE_CORRECTION_SIGN = 1
 STAGE_MOVE_TIMEOUT_S = 60.0
 STAGE_CHECK_TIMEOUT_S = 180.0
 STAGE_POLL_INTERVAL_S = 0.05
-STAGE_VERIFY_TOLERANCE_MM = 5e-6
 
 TEXT_COLOR = "#0A4A51"
 GREEN_COLOR = "#1EAD4F"
@@ -1043,24 +1042,6 @@ class HomodyneGui:
         self.set_stage_position_from_thread(position_mm)
         return position_mm
 
-    def stage_move_observed(self, before_mm, after_mm, expected_delta_mm):
-        if after_mm is None:
-            return False
-
-        actual_delta_mm = after_mm - before_mm
-        tolerance_mm = max(
-            STAGE_VERIFY_TOLERANCE_MM,
-            abs(expected_delta_mm) * 0.2
-        )
-
-        if abs(actual_delta_mm) < tolerance_mm:
-            return False
-
-        if expected_delta_mm * actual_delta_mm < 0:
-            return False
-
-        return True
-
     def toggle_monitoring(self):
         if self.monitoring:
             self.stop_monitoring()
@@ -1223,11 +1204,11 @@ class HomodyneGui:
             )
             return
 
-        self.start_stage_move_by_steps(direction * self.stage_step_mm)
+        self.start_stage_move_by(direction * self.stage_step_mm)
 
     def manual_stage_move_worker(self):
         while self.stage is not None and self.stage.is_moving:
-            position_mm = self.stage.current_position
+            position_mm = self.stage.get_position()
 
             self.root.after(
                 0,
@@ -1265,6 +1246,7 @@ class HomodyneGui:
             text="Status: stage step done",
             text_color=GREEN_COLOR
         )
+        self.finish_stage_command_ui()
 
     def move_stage_to_center(self):
         if self.lock_active:
@@ -1301,6 +1283,84 @@ class HomodyneGui:
             return
 
         self.start_stage_move_to_stepped(0.0)
+
+    def start_stage_move_to(self, target_mm):
+        if self.stage is None or not self.stage_connected:
+            self.label_stage_status.configure(
+                text=f"Stage: unavailable ({STAGE_IMPORT_ERROR})",
+                text_color=RED_COLOR
+            )
+            self.status.configure(
+                text="Status: stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
+        if self.lock_active:
+            self.status.configure(
+                text="Status: unlock before manual stage movement",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        if self.stage_command_active or self.stage.is_moving:
+            self.status.configure(
+                text="Status: stage is already moving",
+                text_color=ORANGE_COLOR
+            )
+            return
+
+        start_pos = self.stage.get_position()
+        target_mm = self.stage.clamp_position(target_mm)
+
+        if abs(target_mm - start_pos) < 1e-12:
+            self.status.configure(
+                text="Status: stage already at target",
+                text_color=TEXT_COLOR
+            )
+            self.label_stage_position.configure(
+                text=f"Stage position: {start_pos:.9f} mm"
+            )
+            return
+
+        self.stage_command_active = True
+        self.set_stage_controls_enabled(False)
+
+        if not self.stage.move_absolute(target_mm):
+            self.finish_stage_command_ui()
+            self.status.configure(
+                text="Status: stage move failed",
+                text_color=RED_COLOR
+            )
+            return
+
+        self.status.configure(
+            text=f"Status: stage moving to {target_mm:.9f} mm",
+            text_color=TEXT_COLOR
+        )
+        self.label_stage_status.configure(
+            text="Stage: moving",
+            text_color=ORANGE_COLOR
+        )
+        self.label_stage_position.configure(
+            text=f"Stage target: {target_mm:.9f} mm"
+        )
+
+        threading.Thread(
+            target=self.manual_stage_move_worker,
+            daemon=True
+        ).start()
+
+    def start_stage_move_by(self, move_mm):
+        if self.stage is None or not self.stage_connected:
+            self.status.configure(
+                text="Status: stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
+        start_pos = self.stage.get_position()
+        self.start_stage_move_to(start_pos + move_mm)
 
     def start_stage_move_to_stepped(self, target_mm):
         if self.stage is None or not self.stage_connected:
@@ -1655,7 +1715,6 @@ class HomodyneGui:
         direction = 1 if target_mm > start_pos else -1
         current_pos = start_pos
         remaining = abs(target_mm - start_pos)
-        max_steps = max(1, int(math.ceil(remaining / step_mm)) + 5)
 
         self.set_status_from_thread(
             (
@@ -1666,17 +1725,13 @@ class HomodyneGui:
         )
 
         try:
-            for _ in range(max_steps):
-                if remaining <= STAGE_VERIFY_TOLERANCE_MM:
-                    break
-
+            while remaining > 1e-12:
                 next_step = min(step_mm, remaining)
                 next_target = self.stage.clamp_position(
                     current_pos + direction * next_step
                 )
-                expected_delta = next_target - current_pos
 
-                if abs(expected_delta) <= STAGE_VERIFY_TOLERANCE_MM:
+                if abs(next_target - current_pos) < 1e-12:
                     break
 
                 if not self.stage.move_absolute(next_target):
@@ -1686,54 +1741,22 @@ class HomodyneGui:
                     )
                     return
 
-                try:
-                    actual_pos = self.wait_for_stage_motion()
-                except RuntimeError as error:
-                    self.set_status_from_thread(
-                        f"Status: {error}",
-                        RED_COLOR
-                    )
-                    return
+                while self.stage is not None and self.stage.is_moving:
+                    position_mm = self.stage.get_position()
+                    self.set_stage_position_from_thread(position_mm)
+                    time.sleep(0.05)
 
-                if actual_pos is None:
-                    self.set_status_from_thread(
-                        "Status: could not read stage position",
-                        RED_COLOR
-                    )
-                    return
-
-                if not self.stage_move_observed(
-                    current_pos,
-                    actual_pos,
-                    expected_delta
-                ):
-                    actual_delta = actual_pos - current_pos
-                    self.set_status_from_thread(
-                        (
-                            "Status: stage did not follow command "
-                            f"(command {expected_delta:+.9f} mm, "
-                            f"actual {actual_delta:+.9f} mm)"
-                        ),
-                        RED_COLOR
-                    )
-                    return
-
-                current_pos = actual_pos
+                current_pos = next_target
                 remaining = abs(target_mm - current_pos)
+                self.set_stage_position_from_thread(current_pos)
 
-                if remaining > STAGE_VERIFY_TOLERANCE_MM:
+                if remaining > 1e-12:
                     time.sleep(delay_s)
 
-            if remaining > STAGE_VERIFY_TOLERANCE_MM:
-                self.set_status_from_thread(
-                    (
-                        "Status: stage target not reached "
-                        f"(at {current_pos:.9f} mm, "
-                        f"target {target_mm:.9f} mm)"
-                    ),
-                    RED_COLOR
-                )
-                return
+            if self.stage is not None and self.stage_connected:
+                current_pos = self.stage.get_position()
+                self.stage_position_mm = current_pos
+                self.set_stage_position_from_thread(current_pos)
 
             self.set_status_from_thread(
                 f"Status: reached {current_pos:.9f} mm",
