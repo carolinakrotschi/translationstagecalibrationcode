@@ -1013,7 +1013,7 @@ class HomodyneGui:
             0,
             lambda p=position_mm:
             self.label_stage_position.configure(
-                text=f"Stage position: {p:.9f} mm"
+                text=f"Stage position: {p:.6f} mm"
             ) if p is not None else None
         )
 
@@ -1156,7 +1156,7 @@ class HomodyneGui:
                 text_color=GREEN_COLOR
             )
             self.label_stage_position.configure(
-                text=f"Stage position: {position_mm:.9f} mm"
+                text=f"Stage position: {position_mm:.6f} mm"
             )
         else:
             if error_text is None:
@@ -1214,7 +1214,7 @@ class HomodyneGui:
                 0,
                 lambda p=position_mm:
                 self.label_stage_position.configure(
-                    text=f"Stage position: {p:.9f} mm"
+                    text=f"Stage position: {p:.6f} mm"
                 )
             )
 
@@ -1235,7 +1235,7 @@ class HomodyneGui:
         if position_mm is not None:
             self.stage_position_mm = position_mm
             self.label_stage_position.configure(
-                text=f"Stage position: {position_mm:.9f} mm"
+                text=f"Stage position: {position_mm:.6f} mm"
             )
 
         self.label_stage_status.configure(
@@ -1284,7 +1284,7 @@ class HomodyneGui:
 
         self.start_stage_move_to_stepped(0.0)
 
-    def start_stage_move_to(self, target_mm):
+    def start_stage_move_to(self, target_mm, start_pos=None):
         if self.stage is None or not self.stage_connected:
             self.label_stage_status.configure(
                 text=f"Stage: unavailable ({STAGE_IMPORT_ERROR})",
@@ -1310,7 +1310,9 @@ class HomodyneGui:
             )
             return
 
-        start_pos = self.stage.get_position()
+        if start_pos is None:
+            start_pos = self.stage.get_position()
+
         target_mm = self.stage.clamp_position(target_mm)
 
         if abs(target_mm - start_pos) < 1e-12:
@@ -1319,7 +1321,7 @@ class HomodyneGui:
                 text_color=TEXT_COLOR
             )
             self.label_stage_position.configure(
-                text=f"Stage position: {start_pos:.9f} mm"
+                text=f"Stage position: {start_pos:.6f} mm"
             )
             return
 
@@ -1335,7 +1337,7 @@ class HomodyneGui:
             return
 
         self.status.configure(
-            text=f"Status: stage moving to {target_mm:.9f} mm",
+            text=f"Status: stage moving to {target_mm:.6f} mm",
             text_color=TEXT_COLOR
         )
         self.label_stage_status.configure(
@@ -1343,7 +1345,7 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
         self.label_stage_position.configure(
-            text=f"Stage target: {target_mm:.9f} mm"
+            text=f"Stage target: {target_mm:.6f} mm"
         )
 
         threading.Thread(
@@ -1360,7 +1362,10 @@ class HomodyneGui:
             return
 
         start_pos = self.stage.get_position()
-        self.start_stage_move_to(start_pos + move_mm)
+        self.start_stage_move_to(
+            start_pos + move_mm,
+            start_pos=start_pos
+        )
 
     def start_stage_move_to_stepped(self, target_mm):
         if self.stage is None or not self.stage_connected:
@@ -1397,7 +1402,7 @@ class HomodyneGui:
                 text_color=TEXT_COLOR
             )
             self.label_stage_position.configure(
-                text=f"Stage position: {start_pos:.9f} mm"
+                text=f"Stage position: {start_pos:.6f} mm"
             )
             return
 
@@ -1688,7 +1693,7 @@ class HomodyneGui:
                 0,
                 lambda p=position_mm:
                 self.label_stage_position.configure(
-                    text=f"Stage position: {p:.9f} mm"
+                    text=f"Stage position: {p:.6f} mm"
                 ) if p is not None else None
             )
 
@@ -1718,8 +1723,8 @@ class HomodyneGui:
 
         self.set_status_from_thread(
             (
-                f"Status: moving to {target_mm:.9f} mm "
-                f"in {step_mm:.9f} mm steps"
+                f"Status: moving to {target_mm:.6f} mm "
+                f"in {step_mm:.6f} mm steps"
             ),
             TEXT_COLOR
         )
@@ -1759,7 +1764,7 @@ class HomodyneGui:
                 self.set_stage_position_from_thread(current_pos)
 
             self.set_status_from_thread(
-                f"Status: reached {current_pos:.9f} mm",
+                f"Status: reached {current_pos:.6f} mm",
                 GREEN_COLOR
             )
         finally:
@@ -2148,7 +2153,7 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
         self.label_stage_position.configure(
-            text=f"Stage target: {target_position_mm:.9f} mm"
+            text=f"Stage target: {target_position_mm:.6f} mm"
         )
 
         threading.Thread(
@@ -2168,7 +2173,7 @@ class HomodyneGui:
                 0,
                 lambda p=position_mm:
                 self.label_stage_position.configure(
-                    text=f"Stage position: {p:.9f} mm"
+                    text=f"Stage position: {p:.6f} mm"
                 )
             )
 
@@ -2191,7 +2196,7 @@ class HomodyneGui:
         if position_mm is not None:
             self.stage_position_mm = position_mm
             self.label_stage_position.configure(
-                text=f"Stage position: {position_mm:.9f} mm"
+                text=f"Stage position: {position_mm:.6f} mm"
             )
 
         if not self.lock_active:
