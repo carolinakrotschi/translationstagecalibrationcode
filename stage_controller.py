@@ -290,6 +290,45 @@ class StageController:
         except:
             pass
     # -----------------------------------------------------------------------------
+    # 5.6 SET VELOCITY (MM/S) AND ACCELERATION (MM/S^2)
+    # -----------------------------------------------------------------------------
+    def set_velocity(self, velocity_mm_s):
+
+        try:
+
+            if not self.connected:
+                return False
+
+            # Ask controller to use this velocity for subsequent moves
+            # GCS command 'VEL' sets the velocity for an axis
+            self.device.VEL(STAGE_AXIS, float(velocity_mm_s))
+
+            return True
+
+        except Exception as e:
+
+            print("Set velocity error:", e)
+
+            return False
+
+    def set_acceleration(self, acc_mm_s2):
+
+        try:
+
+            if not self.connected:
+                return False
+
+            # GCS command 'ACC' sets acceleration for an axis
+            self.device.ACC(STAGE_AXIS, float(acc_mm_s2))
+
+            return True
+
+        except Exception as e:
+
+            print("Set acceleration error:", e)
+
+            return False
+    # -----------------------------------------------------------------------------
     # 6.1 STOP THE STAGE
     # -----------------------------------------------------------------------------
     
