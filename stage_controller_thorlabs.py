@@ -132,7 +132,8 @@ class StageController:
 
         for _ in range(5):
             try:
-                self.current_position = float(str(self.device.Position))
+                pos_str = str(self.device.Position).replace(",", ".")
+                self.current_position = float(pos_str)
                 return self.current_position
             except Exception as e:
                 print("get_position error:", e)
