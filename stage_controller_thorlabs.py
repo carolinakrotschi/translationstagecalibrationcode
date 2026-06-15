@@ -1,271 +1,516 @@
-"""
-stage_controller_thorlabs.py
+# =============================================================================
+# TABLE OF CONTENTS
+# 1. Imports
+# 2. StageController setup
+# 3. Connection and limits
+# 4. Position helpers
+# 5. Movement commands
+# 6. Cleanup
+# =============================================================================
 
-Kinesis-only stage controller for Thorlabs LTS / Integrated Stepper stages.
 
-Requirements:
-- Thorlabs Kinesis 64-bit installed
-- pythonnet installed in the Python environment
-"""
+# =============================================================================
+# 1. IMPORTS
+# =============================================================================
 
-from __future__ import annotations
-
-import os
-import sys
 import time
-from typing import List, Optional
+import threading
+import clr
+
+clr.AddReference(
+    r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.DeviceManagerCLI.dll"
+)
+
+clr.AddReference(
+    r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.GenericMotorCLI.dll"
+)
+
+clr.AddReference(
+    r"C:\Program Files\Thorlabs\Kinesis\ThorLabs.MotionControl.IntegratedStepperMotorsCLI.dll"
+)
+
+from System import Decimal
+
+from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI
+from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
 
 
-class StageControllerThorlabs:
-    """Small Thorlabs Kinesis wrapper for an LTS-style integrated stepper."""
+# =============================================================================
+# 2. STAGE CONTROLLER CLASS
+# =============================================================================
 
-    SETTINGS_TIMEOUT_MS = 10_000
-    MOVE_TIMEOUT_MS = 60_000
-    POLLING_INTERVAL_MS = 250
+class StageController:
 
-    def __init__(self, serial: Optional[str] = None, kinesis_path: Optional[str] = None):
-        self.serial = serial
-        self.kinesis_path = kinesis_path
+    # =========================================================================
+    # 2.1 INITIAL STAGE STATE
+    # =========================================================================
 
-        self._device_list: List[str] = []
-        self.device_info = None
+    def __init__(self, serial_no="45877001"):
+
+        self.serial_no = serial_no
+
         self.device = None
+
         self.connected = False
-        self.DeviceManagerCLI = None
 
         self.current_position = 0.0
-        self.min_position = -15.0
-        self.max_position = 15.0
+
+        self.target_position = 0.0
+
         self.step_size = 0.0001
-        self.velocity = 0.001
+
+        self.velocity = 10.0
+
         self.is_moving = False
 
-        self._polling_started = False
-        self._dll_directory_handle = None
-        self._assemblies_loaded = False
+        self.min_position = 0.0
 
-    @staticmethod
-    def _standard_kinesis_paths() -> List[str]:
-        return [
-            r"C:\Program Files\Thorlabs\Kinesis",
-            r"C:\Program Files (x86)\Thorlabs\Kinesis",
-            os.path.join(os.getcwd(), "thorlabsstage", "dlls"),
-        ]
+        self.max_position = 300.0
 
-    def _find_kinesis_path(self) -> str:
-        if self.kinesis_path and os.path.isdir(self.kinesis_path):
-            return self.kinesis_path
+    # =========================================================================
+    # 3.1 CONNECT TO THE TRANSLATION STAGE
+    # =========================================================================
 
-        for path in self._standard_kinesis_paths():
-            if os.path.isdir(path):
-                self.kinesis_path = path
-                return path
-
-        raise RuntimeError("Thorlabs Kinesis path not found.")
-
-    def _load_assemblies(self) -> None:
-        if self._assemblies_loaded:
-            return
+    def connect(self):
 
         try:
-            import clr
-        except ImportError as exc:
-            raise RuntimeError("pythonnet is not installed. Install it with: pip install pythonnet") from exc
 
-        kinesis_path = self._find_kinesis_path()
+            DeviceManagerCLI.BuildDeviceList()
 
-        if hasattr(os, "add_dll_directory"):
-            self._dll_directory_handle = os.add_dll_directory(kinesis_path)
+            self.device = (
+                LongTravelStage.CreateLongTravelStage(
+                    self.serial_no
+                )
+            )
 
-        if kinesis_path not in sys.path:
-            sys.path.append(kinesis_path)
-        os.environ["PATH"] = kinesis_path + os.pathsep + os.environ.get("PATH", "")
+            self.device.Connect(
+                self.serial_no
+            )
 
-        references = [
-            "Thorlabs.MotionControl.DeviceManagerCLI",
-            "Thorlabs.MotionControl.GenericMotorCLI",
-            "Thorlabs.MotionControl.IntegratedStepperMotorsCLI",
-        ]
+            if not self.device.IsSettingsInitialized():
 
-        for reference in references:
-            dll_path = os.path.join(kinesis_path, reference + ".dll")
-            if not os.path.exists(dll_path):
-                raise RuntimeError(f"Required Kinesis DLL not found: {dll_path}")
-            clr.AddReference(reference)
+                self.device.WaitForSettingsInitialized(
+                    10000
+                )
 
-        self._assemblies_loaded = True
+            self.device.StartPolling(
+                250
+            )
 
-    @staticmethod
-    def _net_decimal(value: float):
-        from System import Decimal as NetDecimal
-        from System.Globalization import CultureInfo
+            time.sleep(0.5)
 
-        return NetDecimal.Parse(str(float(value)), CultureInfo.InvariantCulture)
+            self.device.EnableDevice()
 
-    def connect(self) -> bool:
-        """Load Kinesis and build the device list."""
-        self._load_assemblies()
+            time.sleep(0.5)
 
-        from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI
-        from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
+            print("Homing stage...")
 
-        DeviceManagerCLI.BuildDeviceList()
+            self.device.Home(
+                60000
+            )
 
-        all_devices = [str(device) for device in DeviceManagerCLI.GetDeviceList()]
+            print("Homing complete")
+
+            self.current_position = (
+                self.read_device_position()
+            )
+
+            self.read_travel_limits()
+
+            self.connected = True
+
+            return True
+
+        except Exception as e:
+
+            print(
+                "Stage connection error:",
+                e
+            )
+
+            self.connected = False
+
+            return False
+
+    # =========================================================================
+    # 3.2 READ HARDWARE LIMITS
+    # =========================================================================
+
+    def read_travel_limits(self):
+
+        self.min_position = 0.0
+
+        self.max_position = 300.0
+
+    def update_travel_limits(self):
+
         try:
-            lts_devices = [str(device) for device in DeviceManagerCLI.GetDeviceList(LongTravelStage.DevicePrefix)]
-        except Exception:
-            lts_devices = [device for device in all_devices if device.startswith(str(LongTravelStage.DevicePrefix))]
 
-        if not all_devices:
-            raise RuntimeError("No Thorlabs Kinesis devices found.")
+            self.read_travel_limits()
 
-        if self.serial:
-            if self.serial not in all_devices:
-                raise RuntimeError(f"Requested serial {self.serial} was not found. Found: {all_devices}")
-            selected_serial = self.serial
-        elif lts_devices:
-            selected_serial = lts_devices[0]
-        else:
-            raise RuntimeError(
-                "No LTS / Integrated Stepper stage found. "
-                f"Kinesis devices found: {all_devices}"
+            return True
+
+        except Exception as e:
+
+            print(
+                "Stage limit read error:",
+                e
             )
 
-        if not selected_serial.startswith(str(LongTravelStage.DevicePrefix)):
-            raise RuntimeError(
-                f"Serial {selected_serial} is not an LTS / Integrated Stepper device "
-                f"(expected prefix {LongTravelStage.DevicePrefix})."
+            return False
+
+    # =========================================================================
+    # 4.1 READ CURRENT POSITION
+    # =========================================================================
+
+    def read_device_position(self):
+
+        return float(
+            self.device.Position
+        )
+
+    def get_position(self):
+
+        if not self.connected:
+
+            return self.current_position
+
+        try:
+
+            self.current_position = (
+                self.read_device_position()
             )
 
-        self._device_list = all_devices
-        self.device_info = selected_serial
-        self.serial = selected_serial
-        self.DeviceManagerCLI = DeviceManagerCLI
-        self.connected = True
+            return self.current_position
+
+        except Exception as e:
+
+            print(
+                "Position error:",
+                e
+            )
+
+            return self.current_position
+
+    # =========================================================================
+    # 4.2 LIMIT POSITION TO SAFE RANGE
+    # =========================================================================
+
+    def clamp_position(self, position_mm):
+
+        return max(
+            self.min_position,
+            min(
+                self.max_position,
+                float(position_mm)
+            )
+        )
+
+    # =========================================================================
+    # 5.1 MOVE TO ABSOLUTE POSITION
+    # =========================================================================
+
+    def move_absolute(self, target_mm):
+
+        if not self.connected:
+
+            return False
+
+        if self.is_moving:
+
+            return False
+
+        target_mm = self.clamp_position(
+            target_mm
+        )
+
+        self.target_position = target_mm
+
+        self.is_moving = True
+
+        def worker():
+
+            try:
+
+                self.device.MoveTo(
+                    Decimal(target_mm),
+                    60000
+                )
+
+                self.current_position = (
+                    self.get_position()
+                )
+
+            except Exception as e:
+
+                print(
+                    "Move absolute error:",
+                    e
+                )
+
+            finally:
+
+                self.is_moving = False
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
         return True
 
-    def create_first_device(self):
-        """Create and open the selected LongTravelStage device."""
-        if not self.connected:
-            self.connect()
+    # =========================================================================
+    # 5.2 MOVE RELATIVE
+    # =========================================================================
 
-        if self.device is not None:
-            return self.device
+    def move_relative(self, distance_mm):
 
-        from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
+        current = self.get_position()
 
-        serial = str(self.serial or self.device_info)
-        device = LongTravelStage.CreateLongTravelStage(serial)
+        target = current + distance_mm
 
-        try:
-            device.Connect(serial)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Kinesis found serial {serial} as an LTS / Integrated Stepper device, "
-                "but could not open it. Close Kinesis/TestClient if it is running, "
-                "check USB/power/driver state, then reconnect the stage. "
-                f"Original error: {exc}"
-            ) from exc
+        return self.move_absolute(
+            target
+        )
 
-        try:
-            device.WaitForSettingsInitialized(self.SETTINGS_TIMEOUT_MS)
-        except Exception as exc:
-            device.Disconnect(True)
-            raise RuntimeError(f"Device {serial} did not initialize settings in time: {exc}") from exc
+    # =========================================================================
+    # 5.3 STEP MOVEMENT
+    # =========================================================================
 
-        try:
-            device.LoadMotorConfiguration(serial)
-        except Exception:
-            # Some Kinesis installs already have usable settings after initialization.
-            pass
+    def step_positive(self):
 
-        device.StartPolling(self.POLLING_INTERVAL_MS)
-        self._polling_started = True
-        time.sleep(0.5)
+        return self.move_relative(
+            self.step_size
+        )
 
-        device.EnableDevice()
-        time.sleep(0.5)
+    def step_negative(self):
 
-        self.device = device
-        self.current_position = self.read_device_position()
-        return device
+        return self.move_relative(
+            -self.step_size
+        )
 
-    def _require_device(self):
-        if self.device is None:
-            return self.create_first_device()
-        return self.device
+    # =========================================================================
+    # 5.4 MOVE TO LIMITS
+    # =========================================================================
 
-    def read_device_position(self) -> float:
-        """Read the current stage position in mm."""
-        device = self._require_device()
+    def move_to_max(self):
+
+        return self.move_absolute(
+            self.max_position
+        )
+
+    def move_to_min(self):
+
+        return self.move_absolute(
+            self.min_position
+        )
+
+    # =========================================================================
+    # 5.5 SET CURRENT POSITION AS ZERO
+    # =========================================================================
+
+    def set_zero_position(self):
 
         try:
-            device.RequestPosition()
-            time.sleep(0.1)
-        except Exception:
-            pass
 
-        self.current_position = float(device.Position)
-        return self.current_position
+            if not self.connected:
 
-    def move_absolute(self, position_mm: float) -> bool:
-        """Move to an absolute position in mm."""
-        if position_mm < self.min_position or position_mm > self.max_position:
-            raise ValueError(
-                f"Target {position_mm} mm outside allowed range "
-                f"[{self.min_position}, {self.max_position}] mm."
+                return False
+
+            current = (
+                self.get_position()
             )
 
-        device = self._require_device()
-        self.is_moving = True
-        try:
-            device.MoveTo(self._net_decimal(position_mm), self.MOVE_TIMEOUT_MS)
-            self.current_position = self.read_device_position()
-            return True
-        finally:
-            self.is_moving = False
+            print(
+                f"Current position = {current:.6f} mm"
+            )
 
-    def move_relative(self, distance_mm: float) -> bool:
-        """Move by a relative distance in mm."""
-        return self.move_absolute(self.read_device_position() + distance_mm)
+            print(
+                "Kinesis integrated stages do not "
+                "support redefining encoder position "
+                "like PI controllers."
+            )
+
+            return True
+
+        except Exception as e:
+
+            print(
+                "Set zero position error:",
+                e
+            )
+
+            return False
+
+    # =========================================================================
+    # 5.6 STEP SIZE
+    # =========================================================================
+
+    def set_step_size(self, step_size):
+
+        try:
+
+            self.step_size = float(
+                step_size
+            )
+
+        except Exception:
+
+            pass
+
+    # =========================================================================
+    # 5.7 READ VELOCITY
+    # =========================================================================
+
+    def get_velocity(self):
+
+        if not self.connected:
+
+            return self.velocity
+
+        try:
+
+            params = (
+                self.device.GetVelocityParams()
+            )
+
+            self.velocity = float(
+                params.MaxVelocity
+            )
+
+            return self.velocity
+
+        except Exception as e:
+
+            print(
+                "Velocity read error:",
+                e
+            )
+
+            return self.velocity
+
+    # =========================================================================
+    # 5.8 SET VELOCITY
+    # =========================================================================
+
+    def set_velocity(self, velocity_mm_s):
+
+        if not self.connected:
+
+            return False
+
+        try:
+
+            velocity_mm_s = abs(
+                float(velocity_mm_s)
+            )
+
+            if velocity_mm_s <= 0:
+
+                return False
+
+            params = (
+                self.device.GetVelocityParams()
+            )
+
+            params.MaxVelocity = Decimal(
+                velocity_mm_s
+            )
+
+            self.device.SetVelocityParams(
+                params
+            )
+
+            self.velocity = velocity_mm_s
+
+            return True
+
+        except Exception as e:
+
+            print(
+                "Velocity set error:",
+                e
+            )
+
+            return False
+
+    # =========================================================================
+    # 6.1 STOP MOTION
+    # =========================================================================
 
     def stop(self):
-        """Stop stage motion immediately."""
-        if self.device is not None:
-            try:
+
+        try:
+
+            if self.connected:
+
                 self.device.StopImmediate()
-            except Exception:
-                self.device.Stop(self.MOVE_TIMEOUT_MS)
-        self.is_moving = False
+
+        except Exception as e:
+
+            print(
+                "Stage stop error:",
+                e
+            )
+
+    # =========================================================================
+    # 6.2 CLOSE CONNECTION
+    # =========================================================================
 
     def close(self):
-        """Stop polling and disconnect the Kinesis device."""
-        if self.device is not None:
-            if self._polling_started:
-                try:
-                    self.device.StopPolling()
-                except Exception:
-                    pass
-            try:
-                self.device.Disconnect(True)
-            except Exception:
-                try:
-                    self.device.Disconnect()
-                except Exception:
-                    pass
 
-        self.device = None
-        self._polling_started = False
-        self.connected = False
+        try:
 
+            if self.device is not None:
+
+                self.device.StopPolling()
+
+                self.device.Disconnect()
+
+                self.connected = False
+
+        except Exception as e:
+
+            print(
+                "Stage close error:",
+                e
+            )
+
+
+# =============================================================================
+# EXAMPLE USAGE
+# =============================================================================
 
 if __name__ == "__main__":
-    controller = StageControllerThorlabs()
-    print("Connecting to Kinesis...")
-    controller.connect()
-    print(f"[OK] Found devices: {controller._device_list}")
-    print("Opening first LTS stage...")
-    controller.create_first_device()
-    print(f"[OK] Position: {controller.read_device_position()} mm")
-    controller.close()
+
+    stage = StageController(
+        serial_no="45877001"
+    )
+
+    if stage.connect():
+
+        print(
+            "Current position:",
+            stage.get_position()
+        )
+
+        stage.set_velocity(
+            20.0
+        )
+
+        stage.move_absolute(
+            150.0
+        )
+
+        while stage.is_moving:
+
+            time.sleep(
+                0.1
+            )
+
+        print(
+            "New position:",
+            stage.get_position()
+        )
+
+        stage.close()
