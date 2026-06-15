@@ -80,8 +80,17 @@ class StageController:
 
             time.sleep(1)
 
-            print("Homing stage...")
-            self.device.Home(60000)
+            needs_homing = True
+            try:
+                needs_homing = self.device.NeedsHoming
+            except Exception as ex:
+                print("Could not query NeedsHoming, defaulting to True:", ex)
+
+            if needs_homing:
+                print("Homing stage...")
+                self.device.Home(180000) # Increased timeout to 180s (3 minutes) for long travel stages
+            else:
+                print("Stage already homed, skipping homing.")
 
             self._wait_until_ready()
 
@@ -153,7 +162,7 @@ class StageController:
 
         def worker():
             try:
-                self.device.MoveTo(Decimal(target_mm), 60000)
+                self.device.MoveTo(Decimal(target_mm), 180000) # Increased timeout to 180s (3 minutes)
                 self.current_position = self.get_position()
 
             except Exception as e:
