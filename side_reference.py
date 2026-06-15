@@ -21,7 +21,7 @@ from diode_handler import (
     USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
-from stage_controller_thorlabs import StageController
+from stage_controller import StageController
 
 
 TEXT_COLOR = "#0A4A51"
@@ -30,7 +30,7 @@ RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
-DEFAULT_STAGE_SPEED_MM_S = 0.100000
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
 RAW_HISTORY_LENGTH = 300
 STEP_PAUSE_S = 0.05
 REQUIRED_DARK_FRAMES = 3
@@ -97,6 +97,13 @@ class SideApp(ctk.CTk):
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
+
+        self.fringe_detect_state = "unknown"
+        self.fringe_current_max = 0.0
+        self.fringe_current_min = 0.0
+        self.half_fringe_count = 0
+        self.hysteresis = 0.05
+        self.last_calibration_ui_update = 0.0
 
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
         self.fringe_distance_mm = compute_fringe_distance_mm(
@@ -221,7 +228,7 @@ class SideApp(ctk.CTk):
 
         ctk.CTkLabel(
             self.stage_frame,
-            text="Schrittweite / Step size:",
+            text="Step size:",
             font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 0))
@@ -236,6 +243,13 @@ class SideApp(ctk.CTk):
             0,
             f"{self.quarter_wavelength_step_mm:.9f}"
         )
+
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Velocity:",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(5, 0))
 
         self.speed_entry = ctk.CTkEntry(
             self.stage_frame,
@@ -459,12 +473,14 @@ class SideApp(ctk.CTk):
             max_text = "Max Ratio: n/a"
             dark_text = "Dark Threshold Ratio: waiting"
             bright_text = "Bright Threshold Ratio: waiting"
+            hyst_text = "Hysteresis Ratio: waiting"
             norm_text = "Normalized Ratio: 0.0000"
         else:
             min_text = "Min Voltage: n/a"
             max_text = "Max Voltage: n/a"
             dark_text = "Dark Threshold: waiting"
             bright_text = "Bright Threshold: waiting"
+            hyst_text = "Hysteresis: waiting"
             norm_text = "Normalized Voltage: 0.0000"
 
         self.label_calibration_offset = ctk.CTkLabel(
@@ -482,6 +498,14 @@ class SideApp(ctk.CTk):
             text_color=TEXT_COLOR
         )
         self.label_calibration_scale.pack(pady=0)
+
+        self.label_hysteresis = ctk.CTkLabel(
+            self.frame,
+            text=hyst_text,
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
+        )
+        self.label_hysteresis.pack(pady=0)
 
         self.label_sample_count = ctk.CTkLabel(
             self.frame,
@@ -784,14 +808,26 @@ class SideApp(ctk.CTk):
                     self.finish_calibration_display(c)
                 )
 
+            sample_count = 0
             while self.is_monitoring:
                 sample = self.diode.read()
 
-                self.after(
-                    0,
-                    lambda s=sample:
-                    self.update_sample_display(s)
-                )
+                if USE_REFERENCE_DIODE:
+                    self.latest_voltage = sample.ratio
+                    fringe_counted = self.update_accumulated_fringes(sample.ratio)
+                    self.append_raw_history(sample.ratio)
+                else:
+                    self.latest_voltage = sample.raw_voltage
+                    fringe_counted = self.update_accumulated_fringes(sample.raw_voltage)
+                    self.append_raw_history(sample.raw_voltage)
+
+                sample_count += 1
+                if sample_count % 10 == 0 or fringe_counted:
+                    self.after(
+                        0,
+                        lambda s=sample, fc=fringe_counted:
+                        self.update_ui_display(s, fc)
+                    )
 
                 time.sleep(SAMPLE_INTERVAL_S)
 
@@ -819,13 +855,30 @@ class SideApp(ctk.CTk):
 
     def handle_calibration_sample(self, sample_data, elapsed_s, total_s):
 
-        self.after(
-            0,
-            lambda s=sample_data, e=elapsed_s, t=total_s:
-            self.update_calibration_progress(s, e, t)
+        if USE_REFERENCE_DIODE:
+            raw_int, raw_ref = sample_data
+            if abs(raw_ref) < 1e-6:
+                denom = 1e-6 if raw_ref >= 0 else -1e-6
+            else:
+                denom = raw_ref
+            val_to_plot = raw_int / denom
+        else:
+            val_to_plot = sample_data
+
+        self.append_raw_history(
+            val_to_plot
         )
 
-    def update_calibration_progress(
+        now = time.time()
+        if now - self.last_calibration_ui_update > 0.05:
+            self.last_calibration_ui_update = now
+            self.after(
+                0,
+                lambda s=sample_data, e=elapsed_s, t=total_s:
+                self.update_calibration_progress_ui(s, e, t)
+            )
+
+    def update_calibration_progress_ui(
         self,
         sample_data,
         elapsed_s,
@@ -838,7 +891,7 @@ class SideApp(ctk.CTk):
                 denom = 1e-6 if raw_ref >= 0 else -1e-6
             else:
                 denom = raw_ref
-            val_to_plot = raw_int / denom
+            val = raw_int / denom
 
             self.label_raw_pint.configure(
                 text=f"Pint Raw Voltage: {raw_int:+.6f} V"
@@ -847,17 +900,14 @@ class SideApp(ctk.CTk):
                 text=f"Pl Raw Voltage: {raw_ref:+.6f} V"
             )
             self.label_ratio.configure(
-                text=f"Ratio Pint/Pl: {val_to_plot:.6f}"
+                text=f"Ratio Pint/Pl: {val:.6f}"
             )
         else:
-            val_to_plot = sample_data
+            val = sample_data
             self.label_raw_pint.configure(
-                text=f"Pint Raw Voltage: {val_to_plot:+.6f} V"
+                text=f"Pint Raw Voltage: {val:+.6f} V"
             )
 
-        self.append_raw_history(
-            val_to_plot
-        )
         self.update_plot()
 
         self.label_calibration.configure(
@@ -872,6 +922,8 @@ class SideApp(ctk.CTk):
             value_range = max_val - min_val
             self.dark_threshold = min_val + value_range * 0.125
             self.bright_threshold = max_val - value_range * 0.40
+            calibrated_amplitude = value_range / 2
+            self.hysteresis = max(0.5 * calibrated_amplitude, 0.005)
 
             self.label_calibration.configure(
                 text=(
@@ -887,6 +939,9 @@ class SideApp(ctk.CTk):
             self.label_calibration_scale.configure(
                 text=f"Bright Threshold Ratio: {self.bright_threshold:.6f}"
             )
+            self.label_hysteresis.configure(
+                text=f"Hysteresis Ratio: {self.hysteresis:.6f}"
+            )
             self.label_min_ratio.configure(
                 text=f"Min Ratio: {min_val:.6f}"
             )
@@ -899,6 +954,8 @@ class SideApp(ctk.CTk):
             value_range = max_val - min_val
             self.dark_threshold = min_val + value_range * 0.125
             self.bright_threshold = max_val - value_range * 0.40
+            calibrated_amplitude = value_range / 2
+            self.hysteresis = max(0.5 * calibrated_amplitude, 0.005)
 
             self.label_calibration.configure(
                 text=(
@@ -914,6 +971,9 @@ class SideApp(ctk.CTk):
             self.label_calibration_scale.configure(
                 text=f"Bright Threshold: {self.bright_threshold:+.6f} V"
             )
+            self.label_hysteresis.configure(
+                text=f"Hysteresis: {self.hysteresis:.6f}"
+            )
             self.label_min_ratio.configure(
                 text=f"Min Voltage: {min_val:+.6f} V"
             )
@@ -926,18 +986,11 @@ class SideApp(ctk.CTk):
             text_color=GREEN_COLOR
         )
 
-    def update_sample_display(self, sample):
+    def update_ui_display(self, sample, fringe_counted):
 
         self.latest_sample = sample
         
         if USE_REFERENCE_DIODE:
-            self.latest_voltage = sample.ratio
-            fringe_counted = self.update_accumulated_fringes(
-                sample.ratio
-            )
-            self.append_raw_history(
-                sample.ratio
-            )
             self.label_raw_pint.configure(
                 text=f"Pint Raw Voltage: {sample.raw_int:+.6f} V"
             )
@@ -951,13 +1004,6 @@ class SideApp(ctk.CTk):
                 text=f"Normalized Ratio: {sample.normalized_ratio:+.4f}"
             )
         else:
-            self.latest_voltage = sample.raw_voltage
-            fringe_counted = self.update_accumulated_fringes(
-                sample.raw_voltage
-            )
-            self.append_raw_history(
-                sample.raw_voltage
-            )
             self.label_raw_pint.configure(
                 text=f"Pint Raw Voltage: {sample.raw_voltage:+.6f} V"
             )
@@ -1009,6 +1055,7 @@ class SideApp(ctk.CTk):
             / len(self.smoothed_voltage_history)
         )
 
+        # --- 1. Absolute threshold state updates ---
         if smooth_voltage < self.dark_threshold:
             self.dark_counter += 1
         else:
@@ -1022,21 +1069,57 @@ class SideApp(ctk.CTk):
         else:
             self.bright_counter = 0
 
+        # --- 2. Relative hysteresis peak-valley state updates ---
+        if self.fringe_detect_state == "unknown":
+            self.fringe_current_max = smooth_voltage
+            self.fringe_current_min = smooth_voltage
+            self.fringe_detect_state = "rising"
+
+        hyst_triggered = False
+        if self.fringe_detect_state == "rising":
+            if smooth_voltage > self.fringe_current_max:
+                self.fringe_current_max = smooth_voltage
+            elif smooth_voltage < self.fringe_current_max - self.hysteresis:
+                self.fringe_detect_state = "falling"
+                self.fringe_current_min = smooth_voltage
+                self.half_fringe_count += 1
+                if self.half_fringe_count >= 2:
+                    hyst_triggered = True
+        elif self.fringe_detect_state == "falling":
+            if smooth_voltage < self.fringe_current_min:
+                self.fringe_current_min = smooth_voltage
+            elif smooth_voltage > self.fringe_current_min + self.hysteresis:
+                self.fringe_detect_state = "rising"
+                self.fringe_current_max = smooth_voltage
+                self.half_fringe_count += 1
+                if self.half_fringe_count >= 2:
+                    hyst_triggered = True
+
+        # --- 3. Evaluate combined condition with cooldown ---
         cooldown_ok = (
             time.time() - self.last_count_time
         ) > FRINGE_COOLDOWN
 
-        if (
+        abs_triggered = (
             self.was_dark
             and self.bright_counter >= REQUIRED_BRIGHT_FRAMES
-            and cooldown_ok
-        ):
+        )
+
+        if (abs_triggered or hyst_triggered) and cooldown_ok:
             self.accumulated_fringes += 1
+
+            # Reset absolute thresholds state
             self.was_dark = False
-            self.last_count_time = time.time()
             self.dark_counter = 0
             self.bright_counter = 0
 
+            # Reset relative tracking state
+            self.fringe_detect_state = "unknown"
+            self.fringe_current_max = smooth_voltage
+            self.fringe_current_min = smooth_voltage
+            self.half_fringe_count = 0
+
+            self.last_count_time = time.time()
             return True
 
         return False
@@ -1115,6 +1198,11 @@ class SideApp(ctk.CTk):
         self.bright_counter = 0
         self.last_count_time = 0.0
 
+        self.fringe_detect_state = "unknown"
+        self.fringe_current_max = 0.0
+        self.fringe_current_min = 0.0
+        self.half_fringe_count = 0
+
         self.reset_stage_movement_tracking()
 
         self.label_um.configure(
@@ -1129,6 +1217,9 @@ class SideApp(ctk.CTk):
             )
             self.label_calibration_scale.configure(
                 text="Bright Threshold Ratio: waiting"
+            )
+            self.label_hysteresis.configure(
+                text="Hysteresis Ratio: waiting"
             )
             self.label_min_ratio.configure(
                 text="Min Ratio: n/a"
@@ -1154,6 +1245,9 @@ class SideApp(ctk.CTk):
             )
             self.label_calibration_scale.configure(
                 text="Bright Threshold: waiting"
+            )
+            self.label_hysteresis.configure(
+                text="Hysteresis: waiting"
             )
             self.label_min_ratio.configure(
                 text="Min Voltage: n/a"

@@ -1,5 +1,5 @@
 Starting the software
-0. Important: ThorCam and PIMikromove are Hardware-Drivers, they need to be installed on the computer in any way
+0. Important: ThorCam, Thorlabs Kinesis, and PIMikromove are Hardware-Drivers/Control-Software. They need to be installed on the computer to communicate with the hardware.
 1. install git for windows and then go to powershell and try git --version
     1.5 you need git for sipyco
 2. install a python version that is newer than 3.10 and try python --version
@@ -10,7 +10,8 @@ Starting the software
         5.5 if sipyco from git doesnt work try: python -m pip install git+https://github.com/m-labs/sipyco
     6. install local thorlabs sdk cd "C:\Users\(username)\Desktop\translationstagecalibrationcode\thorlabs_tsi_sdk-0.0.8" C:\ProgramData\anaconda3\python -m pip install .
     7. go to https://www.thorlabs.com/software-pages/thorcam/ and in programming interfaces install thorlabs sdk for windows
-    8. start the program :)
+    8. For Thorlabs stages, install the official Thorlabs Kinesis software (64-bit). The DLLs will be loaded from the default path `C:\Program Files\Thorlabs\Kinesis\`. Also ensure 'pythonnet' is installed (listed in requirements.txt) to interface with the .NET DLLs.
+    9. start the program :)
 5. OR install everything else using a venv
     5.1 install a new venv
         5.1.1 using macOs
@@ -31,10 +32,17 @@ connecting the Hardware
     2.1 pi stage
         2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
         2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
-    2.2 thorlabs stage
-        2.2.1 go to kinesis software and click connect
-        2.2.2 in stage_controller change self.min_position and self.max_position to 15 each (this stage has 300mm travel range)
-3. close both apps and then run the program
+    2.2 Thorlabs Kinesis Stage (e.g. LTS150 / LTS300)
+        2.2.1 Serial Number Setup:
+              - The code uses a default serial number "45517804" (configured in stage_controller_thorlabs.py).
+              - If your controller has a different serial number, you must change it in stage_controller_thorlabs.py inside the __init__ method: self.serial_no = "YOUR_SERIAL_NUMBER".
+              - You can find the serial number on the label on the physical controller box or in the Kinesis software.
+        2.2.2 Travel Limits:
+              - In stage_controller_thorlabs.py, change self.min_position and self.max_position. By default, it is configured for 300mm travel range (0.0 to 300.0)
+        2.2.3 CRITICAL - Connection Lock:
+              - Open Kinesis to verify that the stage is working/homed if needed.
+              - IMPORTANT: You MUST close the Thorlabs Kinesis software (and any Simulator) completely before running the Python script. If Kinesis is open, it locks the USB port and the Python script will fail to connect.
+3. close both Kinesis and ThorCam apps and then run the program
 
 
 

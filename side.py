@@ -18,7 +18,7 @@ from diode_handler import (
     SingleDiodeHandler,
     compute_fringe_distance_mm
 )
-from stage_controller_thorlabs import StageController
+from stage_controller import StageController
 
 
 TEXT_COLOR = "#0A4A51"
@@ -27,7 +27,7 @@ RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
-DEFAULT_STAGE_SPEED_MM_S = 0.100000
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
 RAW_HISTORY_LENGTH = 300
 STEP_PAUSE_S = 0.05
 REQUIRED_DARK_FRAMES = 3
@@ -230,6 +230,13 @@ class SideApp(ctk.CTk):
             0,
             f"{self.quarter_wavelength_step_mm:.9f}"
         )
+
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Geschwindigkeit / Velocity:",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(5, 0))
 
         self.speed_entry = ctk.CTkEntry(
             self.stage_frame,
