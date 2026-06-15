@@ -40,6 +40,8 @@ class StageController:
 
         self.step_size = 0.000100000 #small default step size
 
+        self.velocity = 0.0006 #last known stage velocity in mm/s
+
         self.is_moving = False
 
         self.min_position = -13 #minimum travel limit before hardware limits are read in mm
@@ -290,42 +292,56 @@ class StageController:
         except:
             pass
     # -----------------------------------------------------------------------------
-    # 5.6 SET VELOCITY (MM/S) AND ACCELERATION (MM/S^2)
+    # 5.8 READ AND SET STAGE VELOCITY
     # -----------------------------------------------------------------------------
+
+    def get_velocity(self):
+
+        if not self.connected:
+            return self.velocity
+
+        try:
+
+            velocity = self.device.qVEL(STAGE_AXIS)
+
+            self.velocity = float(
+                velocity[STAGE_AXIS]
+            )
+
+            return self.velocity
+
+        except Exception as e:
+
+            print("Stage velocity read error:", e)
+
+            return self.velocity
+
     def set_velocity(self, velocity_mm_s):
 
-        try:
-
-            if not self.connected:
-                return False
-
-            # Ask controller to use this velocity for subsequent moves
-            # GCS command 'VEL' sets the velocity for an axis
-            self.device.VEL(STAGE_AXIS, float(velocity_mm_s))
-
-            return True
-
-        except Exception as e:
-
-            print("Set velocity error:", e)
-
+        if not self.connected:
             return False
 
-    def set_acceleration(self, acc_mm_s2):
-
         try:
 
-            if not self.connected:
+            velocity_mm_s = abs(
+                float(velocity_mm_s)
+            )
+
+            if velocity_mm_s <= 0:
                 return False
 
-            # GCS command 'ACC' sets acceleration for an axis
-            self.device.ACC(STAGE_AXIS, float(acc_mm_s2))
+            self.device.VEL(
+                STAGE_AXIS,
+                velocity_mm_s
+            )
+
+            self.velocity = velocity_mm_s
 
             return True
 
         except Exception as e:
 
-            print("Set acceleration error:", e)
+            print("Stage velocity set error:", e)
 
             return False
     # -----------------------------------------------------------------------------
