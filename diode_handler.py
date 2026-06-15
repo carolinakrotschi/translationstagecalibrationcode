@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 # Single-diode readout uses one NI analog input first.
 PHOTODIODE_CHANNEL = "Dev1/ai0"
+PHOTODIODE_REF_CHANNEL = "Dev1/ai1"
 
 # S1 is treated as cosine, S2 as sine for later quadrature readout.
 PHOTODIODE_COS_CHANNEL = "Dev1/ai0"
@@ -546,3 +547,210 @@ class DiodeHandler:
     def close(self):
 
         self.reader.close()
+
+
+@dataclass
+class ReferenceDiodeCalibration:
+
+    min_ratio: float
+    max_ratio: float
+    offset_ratio: float
+    scale_ratio: float
+    sample_count: int
+
+
+@dataclass
+class ReferenceDiodeSample:
+
+    timestamp: float
+    raw_int: float
+    raw_ref: float
+    ratio: float
+    normalized_ratio: float
+    valid: bool
+
+
+class NIReferenceDiodeReader:
+
+    def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODE_REF_CHANNEL if 'PHOTODE_REF_CHANNEL' in globals() else PHOTODIODE_REF_CHANNEL):
+
+        self.int_channel = int_channel
+        self.ref_channel = ref_channel
+        self.task = None
+
+    def connect(self):
+
+        import nidaqmx
+
+        self.task = nidaqmx.Task()
+        self.task.ai_channels.add_ai_voltage_chan(
+            self.int_channel
+        )
+        self.task.ai_channels.add_ai_voltage_chan(
+            self.ref_channel
+        )
+
+        return True
+
+    def read(self):
+
+        if self.task is None:
+            raise RuntimeError("NI reference diode task is not connected.")
+
+        values = self.task.read()
+
+        if len(values) != 2:
+            raise RuntimeError(
+                "Expected two analog input values (Pint, Pl) from the NI task."
+            )
+
+        return float(values[0]), float(values[1])
+
+    def close(self):
+
+        if self.task is not None:
+            self.task.close()
+            self.task = None
+
+
+class ReferenceDiodeCounter:
+
+    def __init__(self):
+
+        self.min_ratio = 0.0
+        self.max_ratio = 0.0
+        self.offset_ratio = 0.0
+        self.scale_ratio = 1.0
+        self.calibration = None
+        self.sample_count = 0
+
+    def calibrate_from_samples(self, raw_samples):
+
+        if not raw_samples:
+            raise ValueError("No reference diode calibration samples were collected.")
+
+        ratios = []
+        for Pint, Pl in raw_samples:
+            if abs(Pl) < 1e-6:
+                denom = 1e-6 if Pl >= 0 else -1e-6
+            else:
+                denom = Pl
+            ratios.append(Pint / denom)
+
+        self.min_ratio = min(ratios)
+        self.max_ratio = max(ratios)
+        self.offset_ratio = (
+            self.min_ratio + self.max_ratio
+        ) / 2
+        self.scale_ratio = (
+            self.max_ratio - self.min_ratio
+        ) / 2
+
+        if self.scale_ratio <= 1e-12:
+            self.scale_ratio = 1.0
+
+        self.calibration = ReferenceDiodeCalibration(
+            min_ratio=self.min_ratio,
+            max_ratio=self.max_ratio,
+            offset_ratio=self.offset_ratio,
+            scale_ratio=self.scale_ratio,
+            sample_count=len(raw_samples)
+        )
+
+        self.reset()
+
+        return self.calibration
+
+    def reset(self):
+
+        self.sample_count = 0
+
+    def normalize(self, ratio):
+
+        return (
+            ratio - self.offset_ratio
+        ) / self.scale_ratio
+
+    def update(self, raw_int, raw_ref):
+
+        self.sample_count += 1
+
+        if abs(raw_ref) < 1e-6:
+            denom = 1e-6 if raw_ref >= 0 else -1e-6
+        else:
+            denom = raw_ref
+
+        ratio = raw_int / denom
+
+        return ReferenceDiodeSample(
+            timestamp=time.time(),
+            raw_int=raw_int,
+            raw_ref=raw_ref,
+            ratio=ratio,
+            normalized_ratio=self.normalize(ratio),
+            valid=True
+        )
+
+
+class ReferenceDiodeHandler:
+
+    def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODIODE_REF_CHANNEL):
+
+        self.reader = NIReferenceDiodeReader(
+            int_channel=int_channel,
+            ref_channel=ref_channel
+        )
+        self.counter = ReferenceDiodeCounter()
+
+    def connect(self):
+
+        return self.reader.connect()
+
+    def calibrate(
+        self,
+        seconds=CALIBRATION_SECONDS,
+        sample_interval_s=SAMPLE_INTERVAL_S,
+        should_continue=None,
+        sample_callback=None
+    ):
+
+        samples = []
+        start_time = time.time()
+
+        while time.time() - start_time < seconds:
+
+            if should_continue is not None and not should_continue():
+                break
+
+            raw_int, raw_ref = self.reader.read()
+            samples.append((raw_int, raw_ref))
+
+            if sample_callback is not None:
+                sample_callback(
+                    (raw_int, raw_ref),
+                    time.time() - start_time,
+                    seconds
+                )
+
+            time.sleep(sample_interval_s)
+
+        if not samples and should_continue is not None and not should_continue():
+            return None
+
+        return self.counter.calibrate_from_samples(
+            samples
+        )
+
+    def read(self):
+
+        raw_int, raw_ref = self.reader.read()
+
+        return self.counter.update(
+            raw_int,
+            raw_ref
+        )
+
+    def close(self):
+
+        self.reader.close()
+
