@@ -18,7 +18,7 @@ from diode_handler import (
     SingleDiodeHandler,
     compute_fringe_distance_mm
 )
-from stage_controller import StageController
+from stage_controller_thorlabs import StageController
 
 
 TEXT_COLOR = "#0A4A51"
@@ -204,7 +204,7 @@ class SideApp(ctk.CTk):
 
         stage_velocity = None
         if self.stage_connected:
-            stage_velocity = self.stage.get_velocity()
+            stage_velocity = self.stage.set_velocity()
 
         if stage_velocity is None:
             stage_velocity = DEFAULT_STAGE_SPEED_MM_S
