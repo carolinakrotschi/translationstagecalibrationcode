@@ -269,7 +269,7 @@ class SideApp(ctk.CTk):
             self.target_button_frame,
             text="Go to target",
             width=140,
-            command=self.move_to_target_by_steps,
+            command=self.move_to_target,
             fg_color=TEXT_COLOR
         )
         self.btn_target_abs.grid(
@@ -282,7 +282,7 @@ class SideApp(ctk.CTk):
             self.target_button_frame,
             text="Move distance",
             width=140,
-            command=self.move_distance_by_steps,
+            command=self.move_distance,
             fg_color=TEXT_COLOR
         )
         self.btn_target_rel.grid(
@@ -1419,7 +1419,7 @@ class SideApp(ctk.CTk):
             self.stage.max_position
         )
 
-    def move_to_target_by_steps(self):
+    def move_to_target(self):
 
         try:
             target_mm = self.parse_entry_float(
@@ -1432,11 +1432,11 @@ class SideApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_to_stepped(
+        self.start_stage_move_to(
             target_mm
         )
 
-    def move_distance_by_steps(self):
+    def move_distance(self):
 
         try:
             distance_mm = self.parse_entry_float(
@@ -1449,11 +1449,8 @@ class SideApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_by_steps(
-            distance_mm,
-            step_mm=self.quarter_wavelength_step_mm,
-            pause_s=0.0,
-            label_prefix="Continuous travel"
+        self.start_stage_move_by(
+            distance_mm
         )
 
     def update_stage_position_once(self):
