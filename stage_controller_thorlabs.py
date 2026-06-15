@@ -123,9 +123,10 @@ class StageController:
 
         for _ in range(5):
             try:
-                self.current_position = float(self.device.Position)
+                self.current_position = float(str(self.device.Position))
                 return self.current_position
-            except:
+            except Exception as e:
+                print("get_position error:", e)
                 time.sleep(0.2)
 
         return self.current_position
