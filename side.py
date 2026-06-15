@@ -120,6 +120,20 @@ class SideApp(ctk.CTk):
         self.update_comparison_labels()
         self.update_stage_position_once()
 
+        self.all_buttons = [
+            self.restart_btn,
+            self.wavelength_button,
+            self.speed_button,
+            self.btn_target_abs,
+            self.btn_target_rel,
+            self.btn_stop,
+            self.btn_min,
+            self.btn_left,
+            self.btn_center,
+            self.btn_right,
+            self.btn_max
+        ]
+
     # -------------------------------------------------------------------------
     # UI
     # -------------------------------------------------------------------------
@@ -616,6 +630,13 @@ class SideApp(ctk.CTk):
             pady=8
         )
 
+    def set_buttons_enabled(self, enabled):
+
+        state = "normal" if enabled else "disabled"
+
+        for button in self.all_buttons:
+            button.configure(state=state)
+
     # -------------------------------------------------------------------------
     # Monitoring
     # -------------------------------------------------------------------------
@@ -651,17 +672,13 @@ class SideApp(ctk.CTk):
             text_color=ORANGE_COLOR
         )
 
+        self.set_buttons_enabled(False)
+
         self.measurement_thread = threading.Thread(
             target=self.loop,
             daemon=True
         )
         self.measurement_thread.start()
-
-        if self.stage_connected:
-            threading.Thread(
-                target=self.run_stage_motion_by_parameters,
-                daemon=True
-            ).start()
 
     def stop_monitoring(self):
 
@@ -689,6 +706,13 @@ class SideApp(ctk.CTk):
                     text_color=ORANGE_COLOR
                 )
             )
+
+            # Start stage calibration motion if connected
+            if self.stage_connected:
+                threading.Thread(
+                    target=self.calibration_stage_motion,
+                    daemon=True
+                ).start()
 
             calibration = self.diode.calibrate(
                 seconds=CALIBRATION_SECONDS,
@@ -1753,6 +1777,65 @@ class SideApp(ctk.CTk):
                 lambda p=current_pos:
                 self.finish_stage_move(p)
             )
+
+    def calibration_stage_motion(self):
+
+        try:
+            if not self.stage_connected:
+                return
+
+            start_pos = self.stage.get_position()
+            step_mm = 0.0001
+            steps = 8
+
+            # Move forward in 8 steps
+            for i in range(1, steps + 1):
+                if not self.is_monitoring:
+                    return
+
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
+
+                if not self.stage.move_absolute(target):
+                    return
+
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
+
+                time.sleep(0.25)
+
+            # Move backward in 8 steps back to start_pos
+            for i in range(steps - 1, -1, -1):
+                if not self.is_monitoring:
+                    return
+
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
+
+                if not self.stage.move_absolute(target):
+                    return
+
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
+
+                time.sleep(0.25)
+
+        finally:
+            self.after(0, self.finish_calibration_movement)
+
+    def finish_calibration_movement(self):
+
+        if self.stage_connected:
+            current_pos = self.stage.get_position()
+            self.reset_stage_movement_tracking(current_pos)
+        else:
+            self.reset_stage_movement_tracking(150.0)
+
+        self.set_buttons_enabled(True)
+        self.status.configure(
+            text="Monitoring running",
+            text_color=GREEN_COLOR
+        )
 
     def on_close(self):
 
