@@ -199,6 +199,13 @@ class SideApp(ctk.CTk):
         )
         self.wavelength_button.pack(pady=1)
 
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Schrittweite / Step size:",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(5, 0))
+
         self.step_entry = ctk.CTkEntry(
             self.stage_frame,
             placeholder_text="Step size in mm",
@@ -251,6 +258,13 @@ class SideApp(ctk.CTk):
             text_color=TEXT_COLOR
         ).pack(pady=3)
 
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Zielposition oder Distanz / Target or Distance (mm):",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(5, 0))
+
         self.target_entry = ctk.CTkEntry(
             self.stage_frame,
             placeholder_text="Target value or distance in mm",
@@ -288,6 +302,20 @@ class SideApp(ctk.CTk):
         self.btn_target_rel.grid(
             row=0,
             column=1,
+            padx=1
+        )
+
+        self.btn_stop = ctk.CTkButton(
+            self.target_button_frame,
+            text="STOP STAGE",
+            width=140,
+            command=self.stop_stage,
+            fg_color=RED_COLOR,
+            font=("Arial", 11, "bold")
+        )
+        self.btn_stop.grid(
+            row=0,
+            column=2,
             padx=1
         )
 
@@ -1451,6 +1479,19 @@ class SideApp(ctk.CTk):
 
         self.start_stage_move_by(
             distance_mm
+        )
+
+    def stop_stage(self):
+
+        if self.stage_connected:
+            self.stage.stop()
+        self.after(
+            0,
+            lambda:
+            self.status.configure(
+                text="Stage stopped manually",
+                text_color=RED_COLOR
+            )
         )
 
     def update_stage_position_once(self):
