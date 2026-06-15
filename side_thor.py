@@ -18,7 +18,7 @@ from diode_handler import (
     SingleDiodeHandler,
     compute_fringe_distance_mm
 )
-from stage_controller_thorlabs import StageController
+from stage_controller_thor import StageController
 
 
 TEXT_COLOR = "#0A4A51"
