@@ -10,10 +10,6 @@ except ImportError:
     Figure = None
     FigureCanvasTkAgg = None
 
-# Set to True to use reference photodiode (Pl) and measure Pint/Pl ratio.
-# Set to False to fall back to a single photodiode measuring Pint raw voltage only.
-USE_REFERENCE_DIODE = True
-
 from diode_handler import (
     CALIBRATION_SECONDS,
     LASER_WAVELENGTH_NM,
@@ -22,6 +18,7 @@ from diode_handler import (
     SAMPLE_INTERVAL_S,
     SingleDiodeHandler,
     ReferenceDiodeHandler,
+    USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
 from stage_controller_thorlabs import StageController

@@ -7,6 +7,10 @@ from dataclasses import dataclass
 PHOTODIODE_CHANNEL = "Dev1/ai0"
 PHOTODIODE_REF_CHANNEL = "Dev1/ai1"
 
+# Set to True to use reference photodiode (Pl) and measure Pint/Pl ratio.
+# Set to False to fall back to a single photodiode measuring Pint raw voltage only.
+USE_REFERENCE_DIODE = True
+
 # S1 is treated as cosine, S2 as sine for later quadrature readout.
 PHOTODIODE_COS_CHANNEL = "Dev1/ai0"
 PHOTODIODE_SIN_CHANNEL = "Dev1/ai1"
