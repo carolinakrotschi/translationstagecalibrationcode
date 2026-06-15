@@ -186,7 +186,17 @@ class StageController:
     # VELOCITY
     # =============================================================================
 
-    def set_velocity(self, vel):
+    def set_velocity(self, vel=None):
+
+        if vel is None:
+            try:
+                if self.connected:
+                    params = self.device.GetVelocityParams()
+                    self.velocity = float(str(params.MaxVelocity).replace(",", "."))
+                return self.velocity
+            except Exception as e:
+                print("Get velocity error:", e)
+                return self.velocity
 
         try:
             params = self.device.GetVelocityParams()
