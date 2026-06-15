@@ -34,6 +34,21 @@ REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
 FRINGE_COOLDOWN = 0.08
 
+# =============================================================================
+# STAGE AUTOMATIC MOTION PARAMETERS (similar to movestage.py)
+# =============================================================================
+# Mode: 'continuous' or 'stepped'
+MODE = "continuous"
+
+# For continuous mode:
+VELOCITY_MM_S = 0.0006  # Velocity in mm/s
+TOTAL_DISTANCE_MM = 13.0  # Total distance to move in mm
+
+# For stepped mode:
+VELOCITY_MM_S_STEPPED = 1.00  # Velocity in mm/s
+STEP_SIZE_MM = 0.00001  # Step size in mm
+STEPS = 100  # Number of steps
+
 
 def compute_quarter_wavelength_step_mm(wavelength_nm):
 
@@ -613,6 +628,12 @@ class SideApp(ctk.CTk):
             daemon=True
         )
         self.measurement_thread.start()
+
+        if self.stage_connected:
+            threading.Thread(
+                target=self.run_stage_motion_by_parameters,
+                daemon=True
+            ).start()
 
     def stop_monitoring(self):
 
@@ -1557,6 +1578,143 @@ class SideApp(ctk.CTk):
     # -------------------------------------------------------------------------
     # Shutdown
     # -------------------------------------------------------------------------
+
+    def run_stage_motion_by_parameters(self):
+
+        if not self.stage_connected:
+            return
+
+        current_position = self.stage.get_position()
+
+        if MODE.lower().startswith("c"):
+            self.stage.set_velocity(VELOCITY_MM_S)
+            final_target = self.stage.clamp_position(current_position + TOTAL_DISTANCE_MM)
+
+            self.stage_start_position = current_position
+            self.stage_movement_before_move = self.total_stage_movement
+            self.reset_stage_speed_tracking(current_position)
+
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text=(
+                        f"Continuous move to {final_target:.6f} mm "
+                        f"at {VELOCITY_MM_S} mm/s"
+                    ),
+                    text_color=TEXT_COLOR
+                )
+            )
+
+            if not self.stage.move_absolute(final_target):
+                self.after(
+                    0,
+                    lambda:
+                    self.status.configure(
+                        text="Stage move failed",
+                        text_color=RED_COLOR
+                    )
+                )
+                return
+
+            while self.stage.is_moving and self.is_monitoring:
+                pos = self.stage.get_position()
+                moved = abs(pos - self.stage_start_position)
+                self.after(
+                    0,
+                    lambda p=pos, m=moved, b=self.stage_movement_before_move:
+                    self.update_stage_labels(p, m, b)
+                )
+                time.sleep(0.05)
+
+            pos = self.stage.get_position()
+            moved = abs(pos - self.stage_start_position)
+            self.total_stage_movement = (
+                self.stage_movement_before_move + moved
+            )
+            self.after(
+                0,
+                lambda p=pos:
+                self.finish_stage_move(p)
+            )
+
+        else:
+            self.stage.set_velocity(VELOCITY_MM_S_STEPPED)
+
+            self.stage_start_position = current_position
+            self.stage_movement_before_move = self.total_stage_movement
+            self.reset_stage_speed_tracking(current_position)
+
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text=(
+                        f"Stepped move: {STEPS} steps of "
+                        f"{STEP_SIZE_MM} mm"
+                    ),
+                    text_color=TEXT_COLOR
+                )
+            )
+
+            current_pos = current_position
+            moved = 0.0
+
+            for step in range(STEPS):
+                if not self.is_monitoring:
+                    break
+
+                next_position = self.stage.clamp_position(
+                    current_pos + STEP_SIZE_MM
+                )
+
+                self.after(
+                    0,
+                    lambda s=step, n=next_position:
+                    self.status.configure(
+                        text=(
+                            f"Step {s + 1}/{STEPS}: "
+                            f"move to {n:.7f} mm"
+                        ),
+                        text_color=TEXT_COLOR
+                    )
+                )
+
+                if not self.stage.move_absolute(next_position):
+                    self.after(
+                        0,
+                        lambda:
+                        self.status.configure(
+                            text="Move command failed",
+                            text_color=RED_COLOR
+                        )
+                    )
+                    break
+
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
+
+                step_distance = abs(next_position - current_pos)
+                moved += step_distance
+                current_pos = next_position
+
+                self.total_stage_movement = (
+                    self.stage_movement_before_move + moved
+                )
+                self.after(
+                    0,
+                    lambda p=current_pos, m=moved, b=self.stage_movement_before_move:
+                    self.update_stage_labels(p, m, b)
+                )
+
+                if step < STEPS - 1:
+                    time.sleep(STEP_PAUSE_S)
+
+            self.after(
+                0,
+                lambda p=current_pos:
+                self.finish_stage_move(p)
+            )
 
     def on_close(self):
 
