@@ -140,15 +140,11 @@ class InterferometerApp(ctk.CTk):
 
         #initializes the hardware specific camera code of the ccd
         self.camera_handler = CameraHandler()
-        #stores the value of the connection result
-        self.camera_connected = (
-            self.camera_handler.connect()
-        )
+        #stores the value of the connection result (initially False, will connect in background)
+        self.camera_connected = False
         #same for the stage
         self.stage = StageController()
-        self.stage_connected = (
-            self.stage.connect()
-        )
+        self.stage_connected = False
 
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
         self.fringe_distance_mm = self.compute_fringe_distance(
@@ -570,6 +566,55 @@ class InterferometerApp(ctk.CTk):
         self.update_comparison_labels()#renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
 
         self.update_stage_position_once()#reads the current stage position and updates the label, this is important to have the correct position at the beginning
+
+        # Start connection in a background thread so the GUI does not freeze during startup
+        self.status.configure(
+            text="Connecting to hardware (camera, stage)...",
+            text_color=ORANGE_COLOR
+        )
+        self.set_buttons_enabled(False)
+        threading.Thread(target=self.connect_hardware, daemon=True).start()
+    # -----------------------------------------------------------------------------
+    # 4.1.1 HARDWARE CONNECTION WORKER AND CALLBACK
+    # -----------------------------------------------------------------------------
+
+    def connect_hardware(self):
+        # Connect camera and stage in background
+        cam_ok = self.camera_handler.connect()
+        stage_ok = self.stage.connect()
+        
+        self.after(0, lambda: self.on_hardware_connected(cam_ok, stage_ok))
+
+    def on_hardware_connected(self, cam_ok, stage_ok):
+        self.camera_connected = cam_ok
+        self.stage_connected = stage_ok
+        
+        self.set_buttons_enabled(True)
+        
+        # Update stage position and movement tracking once connected
+        self.update_stage_position_once()
+        self.reset_stage_movement_tracking()
+        
+        if cam_ok and stage_ok:
+            self.status.configure(
+                text="Stopped",
+                text_color=TEXT_COLOR
+            )
+        elif not cam_ok and not stage_ok:
+            self.status.configure(
+                text="Connection failed: Camera and Stage offline",
+                text_color=RED_COLOR
+            )
+        elif not cam_ok:
+            self.status.configure(
+                text="Connection failed: Camera offline",
+                text_color=RED_COLOR
+            )
+        else:
+            self.status.configure(
+                text="Connection failed: Stage offline",
+                text_color=RED_COLOR
+            )
     # -----------------------------------------------------------------------------
     # 4.2 ENABLE OR DISABLE ALL BUTTONS
     # -----------------------------------------------------------------------------
