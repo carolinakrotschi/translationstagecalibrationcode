@@ -9,7 +9,7 @@ VELOCITY_MM_S_STEPPED = 1.00
 MODE = "continuous"
 
 # For continuous mode: total distance to move in mm
-TOTAL_DISTANCE_MM = 0.01
+TOTAL_DISTANCE_MM = 13
 
 # For stepped mode: step size and number of steps
 STEP_SIZE_MM = 0.00001

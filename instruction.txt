@@ -1,3 +1,4 @@
+Starting the software
 0. Important: ThorCam and PIMikromove are Hardware-Drivers, they need to be installed on the computer in any way
 1. install git for windows and then go to powershell and try git --version
     1.5 you need git for sipyco
@@ -26,7 +27,13 @@
 
 connecting the Hardware
 1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
-2. go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
+2. for the stage
+    2.1 pi stage
+        2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
+        2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
+    2.2 thorlabs stage
+        2.2.1 go to kinesis software and click connect
+        2.2.2 in stage_controller change self.min_position and self.max_position to 15 each (this stage has 300mm travel range)
 3. close both apps and then run the program
 
 

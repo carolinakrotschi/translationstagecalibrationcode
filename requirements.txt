@@ -7,6 +7,7 @@ PyUSB
 PySerial 
 pillow
 pipython
+pythonnet
 nidaqmx
 git+https://github.com/m-labs/sipyco
 #thorlabs_tsi_sdk or Alternative wrapper git+https://github.com/ARTIQ-Controllers/TSICam
