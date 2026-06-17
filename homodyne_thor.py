@@ -27,7 +27,6 @@ else:
 # Default NI inputs. S1 is the cosine signal, S2 the sine signal.
 PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"
 PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"
-REFERENCE_CHANNEL = "Dev1/ai2"
 
 LASER_WAVELENGTH_NM = 787.3
 SPEED_OF_LIGHT_MM_PS = 0.299792458
@@ -38,7 +37,6 @@ PHASE_DIRECTION_SIGN = 1
 # Ignore samples close to the circle center. This avoids direction jumps when
 # the photodiode signals are weak or disconnected.
 MIN_SIGNAL_RADIUS = 0.05
-MIN_REFERENCE_SIGNAL = 1e-9
 
 CALIBRATION_SECONDS = 20.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
@@ -101,9 +99,6 @@ class HomodyneSample:
     timestamp: float
     raw_s1: float
     raw_s2: float
-    raw_ref: float
-    ref_corrected_s1: float
-    ref_corrected_s2: float
     s1: float
     s2: float
     radius: float
@@ -121,12 +116,10 @@ class NIPhotodiodeReader:
     def __init__(
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
-        channel_s2=PHOTODIODE_CHANNEL_S2,
-        channel_ref=REFERENCE_CHANNEL
+        channel_s2=PHOTODIODE_CHANNEL_S2
     ):
         self.channel_s1 = channel_s1
         self.channel_s2 = channel_s2
-        self.channel_ref = channel_ref
         self.task = None
         self.nidaqmx = None
 
@@ -137,7 +130,6 @@ class NIPhotodiodeReader:
         self.task = nidaqmx.Task()
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s1)
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s2)
-        self.task.ai_channels.add_ai_voltage_chan(self.channel_ref)
         return True
 
     def read(self):
@@ -146,12 +138,12 @@ class NIPhotodiodeReader:
 
         values = self.task.read()
 
-        if len(values) != 3:
+        if len(values) != 2:
             raise RuntimeError(
-                "Expected three analog input values from the NI task."
+                "Expected two analog input values from the NI task."
             )
 
-        return float(values[0]), float(values[1]), float(values[2])
+        return float(values[0]), float(values[1])
 
     def close(self):
         if self.task is not None:
@@ -164,20 +156,16 @@ class HomodyneQuadratureCounter:
         self,
         phase_direction_sign=PHASE_DIRECTION_SIGN,
         min_signal_radius=MIN_SIGNAL_RADIUS,
-        min_reference_signal=MIN_REFERENCE_SIGNAL,
         fringe_distance_mm=None
     ):
         self.phase_direction_sign = 1 if phase_direction_sign >= 0 else -1
         self.min_signal_radius = min_signal_radius
-        self.min_reference_signal = min_reference_signal
         self.fringe_distance_mm = fringe_distance_mm
 
         self.offset_s1 = 0.0
         self.offset_s2 = 0.0
-        self.offset_ref = 0.0
         self.scale_s1 = 1.0
         self.scale_s2 = 1.0
-        self.scale_ref = 1.0
 
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
@@ -188,35 +176,20 @@ class HomodyneQuadratureCounter:
         if not raw_samples:
             raise ValueError("No calibration samples were collected.")
 
-        corrected_samples = [
-            self.reference_corrected_values(*sample)
-            for sample in raw_samples
-            if abs(sample[2]) >= self.min_reference_signal
-        ]
-
-        if not corrected_samples:
-            raise ValueError("Reference diode signal is too low.")
-
-        s1_values = [sample[0] for sample in corrected_samples]
-        s2_values = [sample[1] for sample in corrected_samples]
-        ref_values = [sample[2] for sample in raw_samples]
+        s1_values = [sample[0] for sample in raw_samples]
+        s2_values = [sample[1] for sample in raw_samples]
 
         self.offset_s1 = (min(s1_values) + max(s1_values)) / 2
         self.offset_s2 = (min(s2_values) + max(s2_values)) / 2
-        self.offset_ref = (min(ref_values) + max(ref_values)) / 2
 
         self.scale_s1 = (max(s1_values) - min(s1_values)) / 2
         self.scale_s2 = (max(s2_values) - min(s2_values)) / 2
-        self.scale_ref = (max(ref_values) - min(ref_values)) / 2
 
         if self.scale_s1 <= 1e-12:
             self.scale_s1 = 1.0
 
         if self.scale_s2 <= 1e-12:
             self.scale_s2 = 1.0
-
-        if self.scale_ref <= 1e-12:
-            self.scale_ref = 1.0
 
         self.reset()
 
@@ -226,50 +199,15 @@ class HomodyneQuadratureCounter:
         self.signed_fringes = 0
         self.total_abs_fringes = 0
 
-    def reference_corrected_values(self, raw_s1, raw_s2, raw_ref):
-        ref_corrected_s1 = raw_s1 / raw_ref
-        ref_corrected_s2 = raw_s2 / raw_ref
-        return ref_corrected_s1, ref_corrected_s2
+    def normalize(self, raw_s1, raw_s2):
+        s1 = (raw_s1 - self.offset_s1) / self.scale_s1
+        s2 = (raw_s2 - self.offset_s2) / self.scale_s2
+        return s1, s2
 
-    def normalize(self, raw_s1, raw_s2, raw_ref):
-        ref_corrected_s1, ref_corrected_s2 = self.reference_corrected_values(
-            raw_s1,
-            raw_s2,
-            raw_ref
-        )
-        s1 = (ref_corrected_s1 - self.offset_s1) / self.scale_s1
-        s2 = (ref_corrected_s2 - self.offset_s2) / self.scale_s2
-        return ref_corrected_s1, ref_corrected_s2, s1, s2
-
-    def update(self, raw_s1, raw_s2, raw_ref):
+    def update(self, raw_s1, raw_s2):
         timestamp = time.time()
 
-        if abs(raw_ref) < self.min_reference_signal:
-            return HomodyneSample(
-                timestamp=timestamp,
-                raw_s1=raw_s1,
-                raw_s2=raw_s2,
-                raw_ref=raw_ref,
-                ref_corrected_s1=0.0,
-                ref_corrected_s2=0.0,
-                s1=0.0,
-                s2=0.0,
-                radius=0.0,
-                phase_rad=0.0,
-                unwrapped_phase_rad=self.unwrapped_phase_rad,
-                delta_phase_rad=0.0,
-                fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
-                signed_fringes=self.signed_fringes,
-                fringe_delta=0,
-                direction="reference_low",
-                valid=False
-            )
-
-        ref_corrected_s1, ref_corrected_s2, s1, s2 = self.normalize(
-            raw_s1,
-            raw_s2,
-            raw_ref
-        )
+        s1, s2 = self.normalize(raw_s1, raw_s2)
         radius = math.hypot(s1, s2)
 
         if radius < self.min_signal_radius:
@@ -277,9 +215,6 @@ class HomodyneQuadratureCounter:
                 timestamp=timestamp,
                 raw_s1=raw_s1,
                 raw_s2=raw_s2,
-                raw_ref=raw_ref,
-                ref_corrected_s1=ref_corrected_s1,
-                ref_corrected_s2=ref_corrected_s2,
                 s1=s1,
                 s2=s2,
                 radius=radius,
@@ -325,9 +260,6 @@ class HomodyneQuadratureCounter:
             timestamp=timestamp,
             raw_s1=raw_s1,
             raw_s2=raw_s2,
-            raw_ref=raw_ref,
-            ref_corrected_s1=ref_corrected_s1,
-            ref_corrected_s2=ref_corrected_s2,
             s1=s1,
             s2=s2,
             radius=radius,
@@ -365,12 +297,11 @@ class HomodyneMonitor:
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
         channel_s2=PHOTODIODE_CHANNEL_S2,
-        channel_ref=REFERENCE_CHANNEL,
         wavelength_nm=LASER_WAVELENGTH_NM,
         phase_direction_sign=PHASE_DIRECTION_SIGN
     ):
         fringe_distance_mm = compute_fringe_distance_mm(wavelength_nm)
-        self.reader = NIPhotodiodeReader(channel_s1, channel_s2, channel_ref)
+        self.reader = NIPhotodiodeReader(channel_s1, channel_s2)
         self.counter = HomodyneQuadratureCounter(
             phase_direction_sign=phase_direction_sign,
             fringe_distance_mm=fringe_distance_mm
@@ -410,8 +341,8 @@ class HomodyneMonitor:
         return samples
 
     def read(self):
-        raw_s1, raw_s2, raw_ref = self.reader.read()
-        return self.counter.update(raw_s1, raw_s2, raw_ref)
+        raw_s1, raw_s2 = self.reader.read()
+        return self.counter.update(raw_s1, raw_s2)
 
     def close(self):
         self.reader.close()
@@ -455,7 +386,6 @@ class HomodyneGui:
         self.measurement_thread = None
         self.raw_s1_history = []
         self.raw_s2_history = []
-        self.raw_ref_history = []
         self.sample_display_lock = threading.Lock()
         self.pending_sample = None
         self.pending_distance_mm = None
@@ -814,12 +744,12 @@ class HomodyneGui:
         self.label_s1_norm = self.make_value_label(
             values_frame,
             "S1 norm",
-            "S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = n/a"
+            "S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a"
         )
         self.label_s2_norm = self.make_value_label(
             values_frame,
             "S2 norm",
-            "S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = n/a"
+            "S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a"
         )
         self.label_unwrapped_phase = self.make_value_label(
             values_frame,
@@ -967,8 +897,7 @@ class HomodyneGui:
 
         channel_text = (
             f"Channels: S1={PHOTODIODE_CHANNEL_S1}, "
-            f"S2={PHOTODIODE_CHANNEL_S2}, "
-            f"Ref={REFERENCE_CHANNEL}"
+            f"S2={PHOTODIODE_CHANNEL_S2}"
         )
         ctk.CTkLabel(
             self.scroll,
@@ -998,19 +927,17 @@ class HomodyneGui:
             self.plot_axis = None
             self.plot_axes = None
         else:
-            self.plot_figure = plt.Figure(figsize=(8, 5.6), dpi=100)
-            axes = self.plot_figure.subplots(3, 1, sharex=True)
+            self.plot_figure = plt.Figure(figsize=(8, 4.6), dpi=100)
+            axes = self.plot_figure.subplots(2, 1, sharex=True)
             self.plot_axis = axes[0]
             self.plot_axes = {
                 'S1_raw': axes[0],
-                'S2_raw': axes[1],
-                'Ref_raw': axes[2]
+                'S2_raw': axes[1]
             }
 
             plot_specs = {
                 'S1_raw': ("S1 raw voltage", 'blue', 'S1'),
-                'S2_raw': ("S2 raw voltage", 'green', 'S2'),
-                'Ref_raw': ("Reference raw voltage", 'red', 'Ref')
+                'S2_raw': ("S2 raw voltage", 'green', 'S2')
             }
 
             self.plot_lines = {}
@@ -1288,7 +1215,6 @@ class HomodyneGui:
         self.last_error_text = None
         self.raw_s1_history = []
         self.raw_s2_history = []
-        self.raw_ref_history = []
         self.calibration_raw_samples = []
         with self.sample_display_lock:
             self.pending_sample = None
@@ -2109,11 +2035,11 @@ class HomodyneGui:
             )
 
             while self.monitoring:
-                raw_s1, raw_s2, raw_ref = self.monitor.reader.read()
+                raw_s1, raw_s2 = self.monitor.reader.read()
                 self.root.after(
                     0,
-                    lambda r1=raw_s1, r2=raw_s2, ref=raw_ref:
-                    self.process_new_sample(r1, r2, ref)
+                    lambda r1=raw_s1, r2=raw_s2:
+                    self.process_new_sample(r1, r2)
                 )
 
                 time.sleep(SAMPLE_INTERVAL_S)
@@ -2144,17 +2070,15 @@ class HomodyneGui:
         )
 
     def update_calibration_progress(self, raw_sample, elapsed_s, total_s):
-        raw_s1, raw_s2, raw_ref = raw_sample
+        raw_s1, raw_s2 = raw_sample
         self.calibration_raw_samples.append(raw_sample)
 
         self.raw_s1_history.append(raw_s1)
         self.raw_s2_history.append(raw_s2)
-        self.raw_ref_history.append(raw_ref)
 
         if len(self.raw_s1_history) > 300:
             self.raw_s1_history.pop(0)
             self.raw_s2_history.pop(0)
-            self.raw_ref_history.pop(0)
 
         self.update_plot()
 
@@ -2163,11 +2087,11 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
 
-    def process_new_sample(self, r1, r2, ref):
+    def process_new_sample(self, r1, r2):
         if not self.monitoring:
             return
 
-        sample = self.monitor.counter.update(r1, r2, ref)
+        sample = self.monitor.counter.update(r1, r2)
         distance_mm = self.monitor.counter.signed_distance_mm()
 
         # Update the UI display with the new sample
@@ -2179,12 +2103,10 @@ class HomodyneGui:
 
         self.raw_s1_history.append(sample.raw_s1)
         self.raw_s2_history.append(sample.raw_s2)
-        self.raw_ref_history.append(sample.raw_ref)
 
         if len(self.raw_s1_history) > 300:
             self.raw_s1_history.pop(0)
             self.raw_s2_history.pop(0)
-            self.raw_ref_history.pop(0)
 
         self.update_plot()
 
@@ -2220,26 +2142,18 @@ class HomodyneGui:
             ) if sample.valid else "phase_rad = invalid"
         )
 
-        if sample.direction == "reference_low":
-            self.label_s1_norm.configure(
-                text="S1_norm = raw_ref too low"
+        self.label_s1_norm.configure(
+            text=(
+                "S1_norm = (raw_S1 - offset_S1) / scale_S1 = "
+                f"{sample.s1:+.6f}"
             )
-            self.label_s2_norm.configure(
-                text="S2_norm = raw_ref too low"
+        )
+        self.label_s2_norm.configure(
+            text=(
+                "S2_norm = (raw_S2 - offset_S2) / scale_S2 = "
+                f"{sample.s2:+.6f}"
             )
-        else:
-            self.label_s1_norm.configure(
-                text=(
-                    "S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = "
-                    f"{sample.s1:+.6f}"
-                )
-            )
-            self.label_s2_norm.configure(
-                text=(
-                    "S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = "
-                    f"{sample.s2:+.6f}"
-                )
-            )
+        )
 
         self.label_unwrapped_phase.configure(
             text=(
@@ -2276,10 +2190,10 @@ class HomodyneGui:
             text="phase_rad = atan2(S2_norm, S1_norm) = n/a"
         )
         self.label_s1_norm.configure(
-            text="S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = n/a"
+            text="S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a"
         )
         self.label_s2_norm.configure(
-            text="S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = n/a"
+            text="S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a"
         )
         self.label_unwrapped_phase.configure(
             text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad"
@@ -2599,7 +2513,6 @@ class HomodyneGui:
         self.latest_distance_mm = None
         self.raw_s1_history = []
         self.raw_s2_history = []
-        self.raw_ref_history = []
         with self.sample_display_lock:
             self.pending_sample = None
             self.pending_distance_mm = None
@@ -2642,8 +2555,7 @@ class HomodyneGui:
         x = list(range(len(self.raw_s1_history)))
         plot_data = {
             'S1_raw': self.raw_s1_history,
-            'S2_raw': self.raw_s2_history,
-            'Ref_raw': self.raw_ref_history
+            'S2_raw': self.raw_s2_history
         }
 
         for key, values in plot_data.items():
