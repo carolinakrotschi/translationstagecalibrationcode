@@ -847,26 +847,14 @@ class SideApp(ctk.CTk):
                     self.finish_calibration_display(c)
                 )
 
-            sample_count = 0
             while self.is_monitoring:
                 sample = self.diode.read()
 
-                if USE_REFERENCE_DIODE:
-                    self.latest_voltage = sample.ratio
-                    fringe_counted = self.update_accumulated_fringes(sample.ratio)
-                    self.append_raw_history(sample.ratio)
-                else:
-                    self.latest_voltage = sample.raw_voltage
-                    fringe_counted = self.update_accumulated_fringes(sample.raw_voltage)
-                    self.append_raw_history(sample.raw_voltage)
-
-                sample_count += 1
-                if sample_count % 10 == 0 or fringe_counted:
-                    self.after(
-                        0,
-                        lambda s=sample, fc=fringe_counted:
-                        self.update_sample_display(s, fc)
-                    )
+                self.after(
+                    0,
+                    lambda s=sample:
+                    self.update_sample_display(s)
+                )
 
                 time.sleep(SAMPLE_INTERVAL_S)
 
@@ -1281,9 +1269,19 @@ class SideApp(ctk.CTk):
             self.diode.counter.offset_voltage = offset_val
             self.diode.counter.scale_voltage = scale_val
 
-    def update_sample_display(self, sample, fringe_counted=False):
+    def update_sample_display(self, sample):
 
         self.latest_sample = sample
+
+        if USE_REFERENCE_DIODE:
+            val = sample.ratio
+        else:
+            val = sample.raw_voltage
+
+        self.latest_voltage = val
+        fringe_counted = self.update_accumulated_fringes(val)
+
+        self.append_raw_history(val)
         self.update_plot()
 
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
