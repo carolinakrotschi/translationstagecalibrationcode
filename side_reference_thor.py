@@ -1,3 +1,4 @@
+#with reference diode
 import threading
 import time
 
@@ -21,7 +22,7 @@ from diode_handler import (
     USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
-from stage_controller_thorlabs import StageController
+from stage_controller_thor import StageController
 
 
 TEXT_COLOR = "#0A4A51"
@@ -36,6 +37,8 @@ STEP_PAUSE_S = 0.05
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
 FRINGE_COOLDOWN = 0.08
+CALIBRATION_STAGE_STEP_MM = 0.0001
+CALIBRATION_STAGE_STEPS = 8
 
 # =============================================================================
 # STAGE AUTOMATIC MOTION PARAMETERS (similar to movestage.py)
@@ -64,7 +67,7 @@ class SideApp(ctk.CTk):
 
         super().__init__()
 
-        self.title("Single Photodiode Fringe Monitor")
+        self.title("Reference Photodiode Fringe Monitor")
         self.geometry("900x1000")
 
         ctk.set_appearance_mode("light")
@@ -2024,40 +2027,75 @@ class SideApp(ctk.CTk):
                 return
 
             start_pos = self.stage.get_position()
-            step_mm = 0.0001
-            steps = 8
+            self.stage_start_position = start_pos
+            self.stage_movement_before_move = self.total_stage_movement
+            self.reset_stage_speed_tracking(start_pos)
 
-            # Move forward in 8 steps
-            for i in range(1, steps + 1):
-                if not self.is_monitoring:
-                    return
+            calibration_end_time = time.time() + CALIBRATION_SECONDS
+            direction = 1
+            step_index = 0
 
-                target = start_pos + step_mm * i
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Status: calibrating - moving stage",
+                    text_color=ORANGE_COLOR
+                )
+            )
+
+            while (
+                self.is_monitoring
+                and self.calibrating
+                and time.time() < calibration_end_time
+            ):
+
+                step_index += direction
+
+                if step_index >= CALIBRATION_STAGE_STEPS:
+                    step_index = CALIBRATION_STAGE_STEPS
+                    direction = -1
+                elif step_index <= 0:
+                    step_index = 0
+                    direction = 1
+
+                target = (
+                    start_pos
+                    + CALIBRATION_STAGE_STEP_MM * step_index
+                )
                 target = self.stage.clamp_position(target)
 
                 if not self.stage.move_absolute(target):
+                    self.after(
+                        0,
+                        lambda:
+                        self.status.configure(
+                            text="Calibration stage move failed",
+                            text_color=RED_COLOR
+                        )
+                    )
                     return
 
                 while self.stage.is_moving and self.is_monitoring:
                     time.sleep(0.01)
 
-                time.sleep(0.25)
+                pos = self.stage.get_position()
+                moved = abs(pos - start_pos)
 
-            # Move backward in 8 steps back to start_pos
-            for i in range(steps - 1, -1, -1):
-                if not self.is_monitoring:
-                    return
+                self.after(
+                    0,
+                    lambda p=pos, m=moved, b=self.stage_movement_before_move:
+                    self.update_stage_labels(p, m, b)
+                )
 
-                target = start_pos + step_mm * i
-                target = self.stage.clamp_position(target)
+                time.sleep(0.18)
 
-                if not self.stage.move_absolute(target):
-                    return
+            if self.is_monitoring:
+                target = self.stage.clamp_position(start_pos)
 
-                while self.stage.is_moving and self.is_monitoring:
-                    time.sleep(0.01)
-
-                time.sleep(0.25)
+                if self.stage.move_absolute(target):
+                    while self.stage.is_moving and self.is_monitoring:
+                        time.sleep(0.01)
 
         finally:
             self.after(0, self.finish_calibration_movement)
@@ -2071,10 +2109,12 @@ class SideApp(ctk.CTk):
             self.reset_stage_movement_tracking(150.0)
 
         self.set_buttons_enabled(True)
-        self.status.configure(
-            text="Monitoring running",
-            text_color=GREEN_COLOR
-        )
+
+        if not self.calibrating:
+            self.status.configure(
+                text="Monitoring running",
+                text_color=GREEN_COLOR
+            )
 
     def on_close(self):
 

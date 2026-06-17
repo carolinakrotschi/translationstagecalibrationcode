@@ -21,7 +21,7 @@ from diode_handler import (
     USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
-from stage_controller import StageController
+from stage_controller_thor import StageController
 
 
 TEXT_COLOR = "#0A4A51"

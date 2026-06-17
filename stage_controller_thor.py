@@ -26,17 +26,19 @@ class StageController:
         self.serial_no = serial_no
         self.device = None
         self.connected = False
+        self.last_error = ""
 
         self.current_position = 0.0
         self.target_position = 0.0
 
         self.step_size = 0.001
-        self.velocity = 10.0
+        self.velocity = 0.0006
 
         self.is_moving = False
 
         self.min_position = 0.0
         self.max_position = 300.0
+        self.home_on_connect = True
 
     # =============================================================================
     # CONNECT
@@ -45,6 +47,7 @@ class StageController:
     def connect(self):
 
         try:
+            self.last_error = ""
             DeviceManagerCLI.BuildDeviceList()
 
             self.device = LongTravelStage.CreateLongTravelStage(
@@ -80,30 +83,23 @@ class StageController:
 
             time.sleep(1)
 
-            # Homing disabled as per user request
-            # needs_homing = True
-            # try:
-            #     needs_homing = self.device.NeedsHoming
-            # except Exception as ex:
-            #     print("Could not query NeedsHoming, defaulting to True:", ex)
-            #
-            # if needs_homing:
-            #     print("Homing stage...")
-            #     self.device.Home(180000) # Increased timeout to 180s (3 minutes) for long travel stages
-            #     print("Moving to default starting position 150.0 mm...")
-            #     self.device.MoveTo(Decimal(150.0), 180000)
-            # else:
-            #     print("Stage already homed, skipping homing.")
-
             self._wait_until_ready()
 
-            print("Homing complete")
+            if self.home_on_connect:
+                print("Homing stage...")
+                self.device.Home(180000)
+                self._wait_until_ready()
+                print("Homing complete")
+            else:
+                print("Homing disabled, skipping homing.")
 
             self.connected = True
+            self.current_position = self.get_position()
             return True
 
         except Exception as e:
-            print("Stage connection error:", e)
+            self.last_error = f"Stage connection error: {e}"
+            print(self.last_error)
             self.connected = False
             return False
 
@@ -124,6 +120,15 @@ class StageController:
 
         return False
 
+    def needs_homing(self):
+
+        try:
+            return bool(self.device.NeedsHoming)
+        except Exception as e:
+            self.last_error = f"Could not query NeedsHoming: {e}"
+            print(self.last_error)
+            return False
+
     # =============================================================================
     # POSITION
     # =============================================================================
@@ -139,7 +144,8 @@ class StageController:
                 self.current_position = float(pos_str)
                 return self.current_position
             except Exception as e:
-                print("get_position error:", e)
+                self.last_error = f"get_position error: {e}"
+                print(self.last_error)
                 time.sleep(0.2)
 
         return self.current_position
@@ -157,20 +163,27 @@ class StageController:
 
     def move_absolute(self, target_mm):
 
-        if not self.connected or self.is_moving:
+        if not self.connected:
+            self.last_error = "Stage not connected"
             return False
 
+        if self.is_moving:
+            self.last_error = "Stage is already moving"
+            return False
+
+        self.last_error = ""
         target_mm = self.clamp_position(target_mm)
         self.target_position = target_mm
         self.is_moving = True
 
         def worker():
             try:
-                self.device.MoveTo(Decimal(target_mm), 180000) # Increased timeout to 180s (3 minutes)
+                self.device.MoveTo(Decimal(float(target_mm)), 180000)
                 self.current_position = self.get_position()
 
             except Exception as e:
-                print("Move error:", e)
+                self.last_error = f"Move error: {e}"
+                print(self.last_error)
 
             finally:
                 self.is_moving = False
@@ -198,7 +211,8 @@ class StageController:
                     self.velocity = float(str(params.MaxVelocity).replace(",", "."))
                 return self.velocity
             except Exception as e:
-                print("Get velocity error:", e)
+                self.last_error = f"Get velocity error: {e}"
+                print(self.last_error)
                 return self.velocity
 
         try:
@@ -209,7 +223,8 @@ class StageController:
             return True
 
         except Exception as e:
-            print("Velocity error:", e)
+            self.last_error = f"Velocity error: {e}"
+            print(self.last_error)
             return False
 
     # =============================================================================
@@ -218,11 +233,21 @@ class StageController:
 
     def stop(self):
 
+        stopped = False
+
         try:
             if self.connected:
                 self.device.StopImmediate()
+                stopped = True
         except Exception as e:
-            print("Stop error:", e)
+            self.last_error = f"Stop error: {e}"
+            print(self.last_error)
+
+        if stopped:
+            time.sleep(0.05)
+            self.is_moving = False
+            self.current_position = self.get_position()
+            self.target_position = self.current_position
 
     # =============================================================================
     # CLOSE
@@ -237,7 +262,8 @@ class StageController:
                 self.connected = False
 
         except Exception as e:
-            print("Close error:", e)
+            self.last_error = f"Close error: {e}"
+            print(self.last_error)
 
 
 # =============================================================================
