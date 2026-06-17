@@ -113,7 +113,7 @@ class SideApp(ctk.CTk):
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
-        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
         self.fringe_amplitude_voltage = default_amp
         self.fringe_rise_threshold_voltage = (
             default_amp * FRINGE_RISE_FRACTION
@@ -946,10 +946,11 @@ class SideApp(ctk.CTk):
             if USE_REFERENCE_DIODE:
                 fringe_min_voltage = calibration.min_ratio
                 fringe_max_voltage = calibration.max_ratio
+                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.002)
             else:
                 fringe_min_voltage = calibration.min_voltage
                 fringe_max_voltage = calibration.max_voltage
-            fringe_amplitude_voltage = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.0015)
 
         self.apply_calibration_extrema(
             calibration,
@@ -1047,7 +1048,7 @@ class SideApp(ctk.CTk):
                 min(samples),
                 max(samples),
                 0,
-                0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+                DEFAULT_FRINGE_AMPLITUDE_V
             )
 
         smoothed_samples = []
@@ -1122,7 +1123,7 @@ class SideApp(ctk.CTk):
             min(smoothed_samples),
             max(smoothed_samples),
             0,
-            0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+            DEFAULT_FRINGE_AMPLITUDE_V
         )
 
     def estimate_fringe_amplitude(self, extrema, fallback_amplitude):
@@ -1167,9 +1168,9 @@ class SideApp(ctk.CTk):
                 current_value - previous_value
             )
 
-        min_valid = 0.005 if USE_REFERENCE_DIODE else MIN_VALID_FRINGE_AMPLITUDE_V
-        max_valid = 2.0 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
-        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+        min_valid = MIN_VALID_FRINGE_AMPLITUDE_V
+        max_valid = 0.8 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
+        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
 
         for index in range(1, len(compressed_extrema)):
             previous_kind, previous_value = compressed_extrema[index - 1]
@@ -1224,9 +1225,9 @@ class SideApp(ctk.CTk):
 
     def configure_fringe_detection(self, amplitude_voltage):
 
-        min_valid = 0.005 if USE_REFERENCE_DIODE else MIN_VALID_FRINGE_AMPLITUDE_V
-        max_valid = 2.0 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
-        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+        min_valid = MIN_VALID_FRINGE_AMPLITUDE_V
+        max_valid = 0.8 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
+        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
 
         if (
             amplitude_voltage is None
