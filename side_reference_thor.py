@@ -1,3 +1,4 @@
+#doesnt work, noise is equal height as interference peaks, so detection fails
 import threading
 import time
 

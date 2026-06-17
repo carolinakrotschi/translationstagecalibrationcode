@@ -1,3 +1,5 @@
+#works
+
 # TABLE OF CONTENTS
 # 1. "Backup plan"/Basic Setting
 # 2. Imports and camera driver path
@@ -719,8 +721,6 @@ class InterferometerApp(ctk.CTk):
                     text_color=ORANGE_COLOR
                 )
 
-                self.start_calibration_stage_motion_if_ready()
-
             self.btn.configure( #changes button to stop monitoring
                 text="STOP MONITORING",
                 fg_color=RED_COLOR
@@ -1261,7 +1261,7 @@ class InterferometerApp(ctk.CTk):
     def lock_deadband_mm(self):
 
         return max(
-            self.fringe_distance_mm / 4,
+            self.fringe_distance_mm / 8,
             1e-7
         )
     # -----------------------------------------------------------------------------
@@ -1586,25 +1586,6 @@ class InterferometerApp(ctk.CTk):
     # -----------------------------------------------------------------------------
     # 7.7 MOVE STAGE DURING CALIBRATION
     # -----------------------------------------------------------------------------
-
-    def start_calibration_stage_motion_if_ready(self):
-
-        if (
-            self.calibrating
-            and not self.calibration_motion_started
-            and self.stage_connected
-        ):
-
-            self.calibration_motion_started = True
-
-            threading.Thread(
-                target=self.calibration_stage_motion,
-                daemon=True
-            ).start()
-    
-    # -----------------------------------------------------------------------------
-    # 7.8 MOVE STAGE DURING CALIBRATION
-    # -----------------------------------------------------------------------------
     
     def calibration_stage_motion(self):
 
@@ -1656,7 +1637,7 @@ class InterferometerApp(ctk.CTk):
                 self.start_pending_center_after_calibration
             )
     # -----------------------------------------------------------------------------
-    # 7.9 START PENDING RETURN AFTER CALIBRATION MOTION
+    # 7.8 START PENDING RETURN AFTER CALIBRATION MOTION
     # -----------------------------------------------------------------------------
 
     def start_pending_center_after_calibration(self):
@@ -1681,7 +1662,7 @@ class InterferometerApp(ctk.CTk):
         self.center_stage_after_calibration_pending = False
         self.move_to_center_after_calibration()
     # -----------------------------------------------------------------------------
-    # 7.10 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
+    # 7.9 CENTER STAGE AFTER A PENDING CALIBRATION MOVE
     # -----------------------------------------------------------------------------
     
     def move_to_center_after_calibration(self):
@@ -1693,7 +1674,7 @@ class InterferometerApp(ctk.CTk):
             reset_after_move=True
         )
     # -----------------------------------------------------------------------------
-    # 7.11 FINISH CALIBRATION RESET
+    # 7.10 FINISH CALIBRATION RESET
     # -----------------------------------------------------------------------------
     #track the stage movement and reset
     def reset_stage_after_calibration(self, pos=None):
@@ -1706,7 +1687,7 @@ class InterferometerApp(ctk.CTk):
 
         self.start_calibration_button_cooldown()
     # -----------------------------------------------------------------------------
-    # 7.12 UPDATE DRIVEN VS CALCULATED DISTANCE
+    # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
     # -----------------------------------------------------------------------------
     #stage movement distance is compared with distance calculated from counted fringes
     def update_comparison_labels(self, driven_mm=None):
@@ -1782,7 +1763,13 @@ class InterferometerApp(ctk.CTk):
 
                 if self.calibrating:
 
-                    self.start_calibration_stage_motion_if_ready()
+                    if (not self.calibration_motion_started
+                            and self.stage_connected):
+                        self.calibration_motion_started = True
+                        threading.Thread(
+                            target=self.calibration_stage_motion,
+                            daemon=True
+                        ).start()
 
                     self.calibration_values.append(
                         intensity
