@@ -113,12 +113,13 @@ class SideApp(ctk.CTk):
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
-        self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
+        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+        self.fringe_amplitude_voltage = default_amp
         self.fringe_rise_threshold_voltage = (
-            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_RISE_FRACTION
+            default_amp * FRINGE_RISE_FRACTION
         )
         self.fringe_rearm_threshold_voltage = (
-            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_REARM_FRACTION
+            default_amp * FRINGE_REARM_FRACTION
         )
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
@@ -941,7 +942,6 @@ class SideApp(ctk.CTk):
                 self.calibration_raw_samples
             )
         )
-
         if fringe_min_voltage is None or fringe_max_voltage is None:
             if USE_REFERENCE_DIODE:
                 fringe_min_voltage = calibration.min_ratio
@@ -949,7 +949,7 @@ class SideApp(ctk.CTk):
             else:
                 fringe_min_voltage = calibration.min_voltage
                 fringe_max_voltage = calibration.max_voltage
-            fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
+            fringe_amplitude_voltage = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
 
         self.apply_calibration_extrema(
             calibration,
@@ -1047,7 +1047,7 @@ class SideApp(ctk.CTk):
                 min(samples),
                 max(samples),
                 0,
-                DEFAULT_FRINGE_AMPLITUDE_V
+                0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
             )
 
         smoothed_samples = []
@@ -1122,7 +1122,7 @@ class SideApp(ctk.CTk):
             min(smoothed_samples),
             max(smoothed_samples),
             0,
-            DEFAULT_FRINGE_AMPLITUDE_V
+            0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
         )
 
     def estimate_fringe_amplitude(self, extrema, fallback_amplitude):
@@ -1167,10 +1167,25 @@ class SideApp(ctk.CTk):
                 current_value - previous_value
             )
 
+        min_valid = 0.005 if USE_REFERENCE_DIODE else MIN_VALID_FRINGE_AMPLITUDE_V
+        max_valid = 2.0 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
+        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+
+        for index in range(1, len(compressed_extrema)):
+            previous_kind, previous_value = compressed_extrema[index - 1]
+            current_kind, current_value = compressed_extrema[index]
+
+            if previous_kind == current_kind:
+                continue
+
+            amplitude = abs(
+                current_value - previous_value
+            )
+
             if (
-                MIN_VALID_FRINGE_AMPLITUDE_V
+                min_valid
                 <= amplitude
-                <= MAX_VALID_FRINGE_AMPLITUDE_V
+                <= max_valid
             ):
                 amplitudes.append(amplitude)
 
@@ -1183,13 +1198,13 @@ class SideApp(ctk.CTk):
             )
 
         if (
-            MIN_VALID_FRINGE_AMPLITUDE_V
+            min_valid
             <= fallback_amplitude
-            <= MAX_VALID_FRINGE_AMPLITUDE_V
+            <= max_valid
         ):
             return fallback_amplitude
 
-        return DEFAULT_FRINGE_AMPLITUDE_V
+        return default_amp
 
     def median_value(self, values):
 
@@ -1209,12 +1224,16 @@ class SideApp(ctk.CTk):
 
     def configure_fringe_detection(self, amplitude_voltage):
 
+        min_valid = 0.005 if USE_REFERENCE_DIODE else MIN_VALID_FRINGE_AMPLITUDE_V
+        max_valid = 2.0 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
+        default_amp = 0.15 if USE_REFERENCE_DIODE else DEFAULT_FRINGE_AMPLITUDE_V
+
         if (
             amplitude_voltage is None
-            or amplitude_voltage < MIN_VALID_FRINGE_AMPLITUDE_V
-            or amplitude_voltage > MAX_VALID_FRINGE_AMPLITUDE_V
+            or amplitude_voltage < min_valid
+            or amplitude_voltage > max_valid
         ):
-            amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
+            amplitude_voltage = default_amp
 
         self.fringe_amplitude_voltage = amplitude_voltage
         self.fringe_rise_threshold_voltage = (
