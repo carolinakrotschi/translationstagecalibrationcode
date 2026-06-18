@@ -362,6 +362,7 @@ class HomodyneQuadratureCounter:
         self.unwrapped_phase_rad = 0.0
         self.signed_fringes = 0
         self.total_abs_fringes = 0
+        self.delta_phase_history = []
 
     def reference_corrected_values(self, raw_s1, raw_s2, raw_ref):
         ref_corrected_s1 = raw_s1 / raw_ref
@@ -452,9 +453,15 @@ class HomodyneQuadratureCounter:
 
             self.signed_fringes = new_signed_fringes
 
-            if delta_phase_rad > 0:
+            self.delta_phase_history.append(delta_phase_rad)
+            if len(self.delta_phase_history) > 15:
+                self.delta_phase_history.pop(0)
+
+            avg_delta_phase = sum(self.delta_phase_history) / len(self.delta_phase_history)
+            threshold = 0.001
+            if avg_delta_phase > threshold:
                 direction = "forward"
-            elif delta_phase_rad < 0:
+            elif avg_delta_phase < -threshold:
                 direction = "backward"
             else:
                 direction = "none"
@@ -2914,11 +2921,23 @@ class HomodyneGui:
             s1_norm_history.append(s1)
             s2_norm_history.append(s2)
 
-        self.plot_lines['circle_trace'].set_data(s1_norm_history, s2_norm_history)
+        # Smooth circle trace to reduce noise and triangular/jagged appearance
+        smoothed_s1 = []
+        smoothed_s2 = []
+        window_size = 5
+        for i in range(len(s1_norm_history)):
+            start = max(0, i - window_size + 1)
+            end = i + 1
+            w1 = s1_norm_history[start:end]
+            w2 = s2_norm_history[start:end]
+            smoothed_s1.append(sum(w1) / len(w1))
+            smoothed_s2.append(sum(w2) / len(w2))
+
+        self.plot_lines['circle_trace'].set_data(smoothed_s1, smoothed_s2)
         
-        if s1_norm_history:
-            curr_x = s1_norm_history[-1]
-            curr_y = s2_norm_history[-1]
+        if smoothed_s1:
+            curr_x = smoothed_s1[-1]
+            curr_y = smoothed_s2[-1]
             self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
             self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
             
