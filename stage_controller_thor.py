@@ -15,6 +15,10 @@ from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI
 from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
 
 
+REQUESTED_ACCELERATION = 0.0
+FALLBACK_MOVING_ACCELERATION = 1.0
+
+
 # =============================================================================
 # STAGE CONTROLLER
 # =============================================================================
@@ -33,6 +37,8 @@ class StageController:
 
         self.step_size = 0.001
         self.velocity = 0.0006
+        self.requested_acceleration = REQUESTED_ACCELERATION
+        self.acceleration = FALLBACK_MOVING_ACCELERATION
 
         self.is_moving = False
 
@@ -218,6 +224,23 @@ class StageController:
         try:
             params = self.device.GetVelocityParams()
             params.MaxVelocity = Decimal(abs(float(vel)))
+
+            # Kinesis move profiles need a positive acceleration to move.
+            # A requested value of 0 means "do not force a new ramp"; keep the
+            # current controller value if it is valid.
+            try:
+                current_acceleration = float(
+                    str(params.Acceleration).replace(",", ".")
+                )
+            except Exception:
+                current_acceleration = self.acceleration
+
+            if self.requested_acceleration <= 0 and current_acceleration > 0:
+                self.acceleration = current_acceleration
+            elif self.acceleration <= 0:
+                self.acceleration = FALLBACK_MOVING_ACCELERATION
+
+            params.Acceleration = Decimal(self.acceleration)
             self.device.SetVelocityParams(params)
             self.velocity = vel
             return True

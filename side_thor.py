@@ -324,7 +324,7 @@ class SideApp(ctk.CTk):
             width=250
         )
         self.target_entry.pack(pady=1)
-        self.target_entry.insert(0, "0.0000")
+        self.target_entry.insert(0, "0.01")
 
         self.target_button_frame = ctk.CTkFrame(
             self.stage_frame,
@@ -627,8 +627,8 @@ class SideApp(ctk.CTk):
             fg_color="#EEEEEE"
         )
         self.plot_frame.pack(
-            fill="both",
-            expand=True,
+            fill="x",
+            expand=False,
             padx=5,
             pady=(4, 10)
         )
@@ -658,13 +658,14 @@ class SideApp(ctk.CTk):
             return
 
         self.plot_figure = Figure(
-            figsize=(8, 3),
+            figsize=(8, 2),
             dpi=100
         )
         self.plot_axis = self.plot_figure.add_subplot(111)
-        self.plot_axis.set_title("Raw diode voltage")
-        self.plot_axis.set_xlabel("Samples")
-        self.plot_axis.set_ylabel("Voltage")
+        self.plot_axis.set_title("Raw diode voltage", fontsize=9)
+        self.plot_axis.set_xlabel("Samples", fontsize=8)
+        self.plot_axis.set_ylabel("Voltage", fontsize=8)
+        self.plot_axis.tick_params(labelsize=8)
         self.plot_axis.grid(
             True,
             linestyle=":",
@@ -677,16 +678,24 @@ class SideApp(ctk.CTk):
             color="blue",
             label="photodiode raw"
         )[0]
-        self.plot_axis.legend(loc="upper right")
+        self.plot_axis.legend(loc="upper right", prop={"size": 8})
+        self.plot_figure.subplots_adjust(
+            left=0.08,
+            right=0.98,
+            top=0.85,
+            bottom=0.22
+        )
 
         self.plot_canvas = FigureCanvasTkAgg(
             self.plot_figure,
             master=self.plot_frame
         )
         self.plot_canvas.draw()
-        self.plot_canvas.get_tk_widget().pack(
-            fill="both",
-            expand=True,
+        plot_widget = self.plot_canvas.get_tk_widget()
+        plot_widget.configure(height=220)
+        plot_widget.pack(
+            fill="x",
+            expand=False,
             padx=8,
             pady=8
         )

@@ -37,6 +37,8 @@ PHASE_DIRECTION_SIGN = 1
 # Ignore samples close to the circle center. This avoids direction jumps when
 # the photodiode signals are weak or disconnected.
 MIN_SIGNAL_RADIUS = 0.05
+MIN_VISIBLE_FRINGE_AMPLITUDE_V = 0.001
+MAX_VISIBLE_FRINGE_AMPLITUDE_V = 0.010
 
 CALIBRATION_SECONDS = 20.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
@@ -164,6 +166,7 @@ class SingleSignalFringeCounter:
         self.fringe_rearm_threshold_voltage = 0.003 * 0.20
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
+        self.fringes_visible = False
         
         self.was_dark = False
         self.dark_counter = 0
@@ -172,6 +175,8 @@ class SingleSignalFringeCounter:
         self.accumulated_fringes = 0
 
     def calibrate(self, s1_values):
+        self.fringes_visible = False
+
         if not s1_values:
             return
         
@@ -206,6 +211,7 @@ class SingleSignalFringeCounter:
                 extrema.append(("max", curr_val))
                 
         amplitude = 0.003
+        visible_amplitude = False
         if minima and maxima:
             compressed_extrema = []
             for kind, value in extrema:
@@ -224,20 +230,22 @@ class SingleSignalFringeCounter:
                 curr_kind, curr_val = compressed_extrema[index]
                 if prev_kind != curr_kind:
                     amp = abs(curr_val - prev_val)
-                    if 0.001 <= amp <= 0.010:
+                    if (
+                        MIN_VISIBLE_FRINGE_AMPLITUDE_V
+                        <= amp
+                        <= MAX_VISIBLE_FRINGE_AMPLITUDE_V
+                    ):
                         amplitudes.append(amp)
             if amplitudes:
                 amplitudes.sort()
                 upper_half = amplitudes[len(amplitudes) // 2:]
                 amplitude = sum(upper_half) / len(upper_half)
-            else:
-                fallback_amp = max(maxima) - min(minima)
-                if 0.001 <= fallback_amp <= 0.010:
-                    amplitude = fallback_amp
-                    
+                visible_amplitude = True
+
         self.fringe_amplitude_voltage = amplitude
         self.fringe_rise_threshold_voltage = amplitude * 0.55
         self.fringe_rearm_threshold_voltage = amplitude * 0.20
+        self.fringes_visible = visible_amplitude
         self.reset()
 
     def reset(self):
@@ -324,6 +332,8 @@ class HomodyneQuadratureCounter:
         self.unwrapped_phase_rad = 0.0
         self.signed_fringes = 0
         self.total_abs_fringes = 0
+        self.s1_fringes_visible = False
+        self.s2_fringes_visible = False
 
     def calibrate_from_samples(self, raw_samples):
         with self.lock:
@@ -347,6 +357,21 @@ class HomodyneQuadratureCounter:
 
             self._reset_unlocked()
 
+    def set_signal_visibility(self, s1_visible, s2_visible):
+        with self.lock:
+            self.s1_fringes_visible = bool(s1_visible)
+            self.s2_fringes_visible = bool(s2_visible)
+
+            if not self.signals_visible_unlocked():
+                self._reset_unlocked()
+
+    def signals_visible_unlocked(self):
+        return self.s1_fringes_visible and self.s2_fringes_visible
+
+    def signals_visible(self):
+        with self.lock:
+            return self.signals_visible_unlocked()
+
     def reset(self):
         with self.lock:
             self._reset_unlocked()
@@ -368,6 +393,24 @@ class HomodyneQuadratureCounter:
 
             s1, s2 = self.normalize(raw_s1, raw_s2)
             radius = math.hypot(s1, s2)
+
+            if not self.signals_visible_unlocked():
+                return HomodyneSample(
+                    timestamp=timestamp,
+                    raw_s1=raw_s1,
+                    raw_s2=raw_s2,
+                    s1=s1,
+                    s2=s2,
+                    radius=radius,
+                    phase_rad=0.0,
+                    unwrapped_phase_rad=self.unwrapped_phase_rad,
+                    delta_phase_rad=0.0,
+                    fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
+                    signed_fringes=self.signed_fringes,
+                    fringe_delta=0,
+                    direction="fringes_not_visible",
+                    valid=False
+                )
 
             if radius < self.min_signal_radius:
                 return HomodyneSample(
@@ -434,7 +477,10 @@ class HomodyneQuadratureCounter:
 
     def signed_distance_mm(self):
         with self.lock:
-            if self.fringe_distance_mm is None:
+            if (
+                self.fringe_distance_mm is None
+                or not self.signals_visible_unlocked()
+            ):
                 return None
 
             return (
@@ -467,6 +513,9 @@ class HomodyneMonitor:
             fringe_distance_mm=fringe_distance_mm
         )
         self.single_counter = SingleSignalFringeCounter(sample_interval_s=SAMPLE_INTERVAL_S)
+        self.s1_visibility_counter = SingleSignalFringeCounter(
+            sample_interval_s=SAMPLE_INTERVAL_S
+        )
 
     def connect(self):
         return self.reader.connect()
@@ -500,12 +549,18 @@ class HomodyneMonitor:
 
         self.counter.calibrate_from_samples(samples)
         s1_values = [sample[0] for sample in samples]
-        self.single_counter.calibrate(s1_values)
+        s2_values = [sample[1] for sample in samples]
+        self.s1_visibility_counter.calibrate(s1_values)
+        self.single_counter.calibrate(s2_values)
+        self.counter.set_signal_visibility(
+            self.s1_visibility_counter.fringes_visible,
+            self.single_counter.fringes_visible
+        )
         return samples
 
     def read(self):
         raw_s1, raw_s2 = self.reader.read()
-        self.single_counter.update(raw_s1)
+        self.single_counter.update(raw_s2)
         return self.counter.update(raw_s1, raw_s2)
 
     def close(self):
@@ -523,7 +578,8 @@ class HomodyneGui:
 
         self.root = ctk.CTk()
         self.root.title("Homodyne Quadrature Monitor")
-        self.root.geometry("700x900")
+        self.root.geometry("900x850")
+        self.root.minsize(760, 650)
         self.root.configure(fg_color="white")
 
         self.scroll = ctk.CTkScrollableFrame(
@@ -615,6 +671,9 @@ class HomodyneGui:
 
         control_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
         control_frame.pack(fill="x", padx=18, pady=8)
+        control_frame.grid_columnconfigure(0, weight=1)
+        control_frame.grid_columnconfigure(1, weight=1)
+        control_frame.grid_columnconfigure(2, weight=1)
 
         self.btn_start = ctk.CTkButton(
             control_frame,
@@ -624,7 +683,7 @@ class HomodyneGui:
             fg_color=TEXT_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_start.grid(row=0, column=0, padx=12, pady=14)
+        self.btn_start.grid(row=0, column=0, padx=12, pady=14, sticky="ew")
 
         self.btn_lock = ctk.CTkButton(
             control_frame,
@@ -634,7 +693,7 @@ class HomodyneGui:
             fg_color=TEXT_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_lock.grid(row=0, column=1, padx=12, pady=14)
+        self.btn_lock.grid(row=0, column=1, padx=12, pady=14, sticky="ew")
 
         self.btn_reset = ctk.CTkButton(
             control_frame,
@@ -644,7 +703,7 @@ class HomodyneGui:
             fg_color=ORANGE_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_reset.grid(row=0, column=2, padx=12, pady=14)
+        self.btn_reset.grid(row=0, column=2, padx=12, pady=14, sticky="ew")
 
         self.stage_frame = ctk.CTkFrame(
             self.scroll,
@@ -817,13 +876,16 @@ class HomodyneGui:
             width=250
         )
         self.target_entry.pack(pady=1)
-        self.target_entry.insert(0, "0.0000")
+        self.target_entry.insert(0, "0.01")
 
         self.target_button_frame = ctk.CTkFrame(
             self.stage_frame,
             fg_color="transparent"
         )
-        self.target_button_frame.pack(pady=1)
+        self.target_button_frame.pack(fill="x", padx=12, pady=1)
+        self.target_button_frame.grid_columnconfigure(0, weight=1)
+        self.target_button_frame.grid_columnconfigure(1, weight=1)
+        self.target_button_frame.grid_columnconfigure(2, weight=1)
 
         self.btn_target_abs = ctk.CTkButton(
             self.target_button_frame,
@@ -832,7 +894,7 @@ class HomodyneGui:
             command=self.move_to_target,
             fg_color=TEXT_COLOR
         )
-        self.btn_target_abs.grid(row=0, column=0, padx=1)
+        self.btn_target_abs.grid(row=0, column=0, padx=1, sticky="ew")
 
         self.btn_target_rel = ctk.CTkButton(
             self.target_button_frame,
@@ -841,7 +903,7 @@ class HomodyneGui:
             command=self.move_distance,
             fg_color=TEXT_COLOR
         )
-        self.btn_target_rel.grid(row=0, column=1, padx=1)
+        self.btn_target_rel.grid(row=0, column=1, padx=1, sticky="ew")
 
         self.btn_stop = ctk.CTkButton(
             self.target_button_frame,
@@ -851,7 +913,7 @@ class HomodyneGui:
             fg_color=RED_COLOR,
             font=("Arial", 11, "bold")
         )
-        self.btn_stop.grid(row=0, column=2, padx=1)
+        self.btn_stop.grid(row=0, column=2, padx=1, sticky="ew")
 
         self.label_stage_position = ctk.CTkLabel(
             self.stage_frame,
@@ -894,22 +956,25 @@ class HomodyneGui:
         # Columns layout container
         self.cols_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.cols_frame.pack(fill="both", expand=True, padx=18, pady=8)
+        self.cols_frame.grid_columnconfigure(0, weight=3, uniform="cols")
+        self.cols_frame.grid_columnconfigure(1, weight=2, uniform="cols")
+        self.cols_frame.grid_rowconfigure(0, weight=1)
 
         # Left Column for Raw plots
         self.left_col = ctk.CTkFrame(self.cols_frame, fg_color="transparent")
-        self.left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        self.left_col.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         # Right Column for Displays and Lissajous
         self.right_col = ctk.CTkFrame(self.cols_frame, fg_color="transparent")
-        self.right_col.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        self.right_col.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
         # Raw Signal Plots Frame (Left Column)
         plot_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
-        plot_frame.pack(fill="both", expand=True, pady=4)
+        plot_frame.pack(fill="x", expand=False, pady=4)
 
         ctk.CTkLabel(
             plot_frame,
-            text="Raw Signal Time Traces",
+            text="Raw Signal",
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(10, 4))
@@ -925,7 +990,7 @@ class HomodyneGui:
             self.plot_axis = None
             self.plot_axes = None
         else:
-            self.plot_figure = plt.Figure(figsize=(5.0, 5.0), dpi=100)
+            self.plot_figure = plt.Figure(figsize=(5.0, 2.6), dpi=100)
             axes = self.plot_figure.subplots(2, 1, sharex=True)
             self.plot_axis = axes[0]
             self.plot_axes = {
@@ -942,25 +1007,34 @@ class HomodyneGui:
             for key in ['S1_raw', 'S2_raw']:
                 axis = self.plot_axes[key]
                 title, color, label = plot_specs[key]
-                axis.set_title(title)
+                axis.set_title(title, fontsize=9)
                 axis.grid(True, linestyle=':', alpha=0.6)
-                axis.set_ylabel("Voltage")
+                axis.set_ylabel("Voltage", fontsize=8)
+                axis.tick_params(labelsize=8)
                 self.plot_lines[key] = axis.plot(
                     [],
                     [],
                     color=color,
                     label=label
                 )[0]
-                axis.legend(loc="upper right")
+                axis.legend(loc="upper right", prop={"size": 8})
 
-            axes[1].set_xlabel("Samples")
-            self.plot_figure.tight_layout()
+            axes[1].set_xlabel("Samples", fontsize=8)
+            self.plot_figure.subplots_adjust(
+                left=0.12,
+                right=0.98,
+                top=0.88,
+                bottom=0.18,
+                hspace=0.55
+            )
             self.plot_canvas = FigureCanvasTkAgg(
                 self.plot_figure,
                 master=plot_frame
             )
             self.plot_canvas.draw()
-            self.plot_canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+            plot_widget = self.plot_canvas.get_tk_widget()
+            plot_widget.configure(height=260)
+            plot_widget.pack(fill="x", expand=False, padx=8, pady=(4, 8))
 
         # Single-Signal Fringe Counter Panel (Right Column)
         self.single_fringe_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
@@ -968,14 +1042,14 @@ class HomodyneGui:
 
         ctk.CTkLabel(
             self.single_fringe_frame,
-            text="Single-Signal Fringe Counter (Signal 1)",
+            text="Single-Signal Fringe Counter (Signal 2)",
             font=("Arial", 14, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(8, 4))
 
         self.label_single_fringes = ctk.CTkLabel(
             self.single_fringe_frame,
-            text="S1 Fringe Count: 0",
+            text="S2 Fringe Count: 0",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
@@ -983,7 +1057,7 @@ class HomodyneGui:
 
         self.label_single_distance = ctk.CTkLabel(
             self.single_fringe_frame,
-            text="S1 Calculated Distance: 0.000000 mm",
+            text="S2 Calculated Distance: 0.000000 mm",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
@@ -991,9 +1065,10 @@ class HomodyneGui:
 
         self.label_single_thresholds = ctk.CTkLabel(
             self.single_fringe_frame,
-            text="S1 Thresholds: Min/Max = n/a, Amplitude = n/a",
+            text="Signal amplitudes: S1 = n/a, S2 = n/a",
             font=("Arial", 11),
-            text_color=TEXT_COLOR
+            text_color=TEXT_COLOR,
+            wraplength=320
         )
         self.label_single_thresholds.pack(pady=2)
 
@@ -2310,9 +2385,13 @@ class HomodyneGui:
             # Retrieve single counter state
             single_fringes = self.monitor.single_counter.accumulated_fringes
             single_distance = single_fringes * self.fringe_distance_mm
-            single_min = self.monitor.single_counter.min_voltage
-            single_max = self.monitor.single_counter.max_voltage
             single_amp = self.monitor.single_counter.fringe_amplitude_voltage
+            s1_amp = self.monitor.s1_visibility_counter.fringe_amplitude_voltage
+            s1_rise = self.monitor.s1_visibility_counter.fringe_rise_threshold_voltage
+            s2_rise = self.monitor.single_counter.fringe_rise_threshold_voltage
+            s1_visible = self.monitor.s1_visibility_counter.fringes_visible
+            s2_visible = self.monitor.single_counter.fringes_visible
+            lissajous_ready = self.monitor.counter.signals_visible()
             
             # Progress label if calibrating
             calibrating = self.calibrating
@@ -2325,13 +2404,20 @@ class HomodyneGui:
         elif sample is not None:
             # Update single signal fringe counter labels (strictly English)
             self.label_single_fringes.configure(
-                text=f"S1 Fringe Count: {single_fringes}"
+                text=f"S2 Fringe Count: {single_fringes}"
             )
             self.label_single_distance.configure(
-                text=f"S1 Calculated Distance: {single_distance:+.6f} mm"
+                text=f"S2 Calculated Distance: {single_distance:+.6f} mm"
             )
+            lissajous_text = "ready" if lissajous_ready else "blocked"
             self.label_single_thresholds.configure(
-                text=f"S1 Thresholds: Min/Max = {single_min:+.4f}/{single_max:+.4f} V, Amp = {single_amp:.6f} V"
+                text=(
+                    f"S1 amp {s1_amp:.6f} V, rise {s1_rise:.6f} V "
+                    f"({'visible' if s1_visible else 'not visible'}), "
+                    f"S2 amp {single_amp:.6f} V, rise {s2_rise:.6f} V "
+                    f"({'visible' if s2_visible else 'not visible'}), "
+                    f"Lissajous {lissajous_text}"
+                )
             )
 
             # Update quadrature homodyne labels (strictly English)
@@ -2365,6 +2451,9 @@ class HomodyneGui:
                 dir_color = RED_COLOR
             elif sample.direction == "signal_low":
                 dir_text = "Signal Low"
+                dir_color = RED_COLOR
+            elif sample.direction == "fringes_not_visible":
+                dir_text = "Fringes Not Visible"
                 dir_color = RED_COLOR
 
             self.label_direction.configure(
@@ -2450,7 +2539,7 @@ class HomodyneGui:
             while self.monitoring:
                 raw_s1, raw_s2 = self.monitor.reader.read()
                 # Run updates in background thread
-                self.monitor.single_counter.update(raw_s1)
+                self.monitor.single_counter.update(raw_s2)
                 sample = self.monitor.counter.update(raw_s1, raw_s2)
                 distance_mm = self.monitor.counter.signed_distance_mm()
 
@@ -2496,9 +2585,9 @@ class HomodyneGui:
             self.calibration_progress_text = f"Status: calibrating {elapsed_s:.1f}/{total_s:.1f}s..."
 
     def reset_calculation_display(self):
-        self.label_single_fringes.configure(text="S1 Fringe Count: 0")
-        self.label_single_distance.configure(text="S1 Calculated Distance: 0.000000 mm")
-        self.label_single_thresholds.configure(text="S1 Thresholds: Min/Max = n/a, Amplitude = n/a")
+        self.label_single_fringes.configure(text="S2 Fringe Count: 0")
+        self.label_single_distance.configure(text="S2 Calculated Distance: 0.000000 mm")
+        self.label_single_thresholds.configure(text="Signal amplitudes: S1 = n/a, S2 = n/a")
 
         self.label_phase.configure(
             text="phase_rad = atan2(S2_norm, S1_norm) = n/a"
@@ -2824,6 +2913,7 @@ class HomodyneGui:
     def reset_monitor(self):
         self.monitor.counter.reset()
         self.monitor.single_counter.reset()
+        self.monitor.s1_visibility_counter.reset()
         self.latest_sample = None
         self.latest_distance_mm = None
         self.raw_s1_history = []
@@ -2882,6 +2972,15 @@ class HomodyneGui:
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
+
+        if not self.monitor.counter.signals_visible():
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
+            self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
+            return
 
         # Update circle plot
         s1_norm_history = []
