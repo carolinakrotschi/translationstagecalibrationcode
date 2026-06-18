@@ -138,6 +138,158 @@ class NIPhotodiodeReader:
             self.task = None
 
 
+class SingleSignalFringeCounter:
+    def __init__(self, sample_interval_s=0.005):
+        self.sample_interval_s = sample_interval_s
+        self.min_voltage = 0.0
+        self.max_voltage = 0.0
+        self.offset_voltage = 0.0
+        self.scale_voltage = 1.0
+        
+        self.fringe_amplitude_voltage = 0.003
+        self.fringe_rise_threshold_voltage = 0.003 * 0.55
+        self.fringe_rearm_threshold_voltage = 0.003 * 0.20
+        self.fringe_trough_voltage = None
+        self.fringe_peak_voltage = None
+        
+        self.was_dark = False
+        self.dark_counter = 0
+        self.bright_counter = 0
+        self.last_count_time = 0.0
+        self.accumulated_fringes = 0
+
+    def calibrate(self, s1_values):
+        if not s1_values:
+            return
+        
+        # Smooth values with a small moving average as in side_thor.py
+        smoothed_samples = []
+        for index in range(len(s1_values)):
+            start_index = max(0, index - 2)
+            end_index = min(len(s1_values), index + 3)
+            window = s1_values[start_index:end_index]
+            smoothed_samples.append(sum(window) / len(window))
+            
+        self.min_voltage = min(smoothed_samples)
+        self.max_voltage = max(smoothed_samples)
+        self.offset_voltage = (self.min_voltage + self.max_voltage) / 2
+        self.scale_voltage = (self.max_voltage - self.min_voltage) / 2
+        if self.scale_voltage <= 1e-12:
+            self.scale_voltage = 1.0
+            
+        # Try to find actual extrema/amplitude
+        minima = []
+        maxima = []
+        extrema = []
+        for index in range(1, len(smoothed_samples) - 1):
+            prev_val = smoothed_samples[index - 1]
+            curr_val = smoothed_samples[index]
+            next_val = smoothed_samples[index + 1]
+            if (curr_val <= prev_val and curr_val < next_val) or (curr_val < prev_val and curr_val <= next_val):
+                minima.append(curr_val)
+                extrema.append(("min", curr_val))
+            if (curr_val >= prev_val and curr_val > next_val) or (curr_val > prev_val and curr_val >= next_val):
+                maxima.append(curr_val)
+                extrema.append(("max", curr_val))
+                
+        amplitude = 0.003
+        if minima and maxima:
+            compressed_extrema = []
+            for kind, value in extrema:
+                if compressed_extrema and compressed_extrema[-1][0] == kind:
+                    prev_kind, prev_val = compressed_extrema[-1]
+                    if kind == "min" and value < prev_val:
+                        compressed_extrema[-1] = (prev_kind, value)
+                    if kind == "max" and value > prev_val:
+                        compressed_extrema[-1] = (prev_kind, value)
+                    continue
+                compressed_extrema.append((kind, value))
+                
+            amplitudes = []
+            for index in range(1, len(compressed_extrema)):
+                prev_kind, prev_val = compressed_extrema[index - 1]
+                curr_kind, curr_val = compressed_extrema[index]
+                if prev_kind != curr_kind:
+                    amp = abs(curr_val - prev_val)
+                    if 0.001 <= amp <= 0.010:
+                        amplitudes.append(amp)
+            if amplitudes:
+                amplitudes.sort()
+                upper_half = amplitudes[len(amplitudes) // 2:]
+                amplitude = sum(upper_half) / len(upper_half)
+            else:
+                fallback_amp = max(maxima) - min(minima)
+                if 0.001 <= fallback_amp <= 0.010:
+                    amplitude = fallback_amp
+                    
+        self.fringe_amplitude_voltage = amplitude
+        self.fringe_rise_threshold_voltage = amplitude * 0.55
+        self.fringe_rearm_threshold_voltage = amplitude * 0.20
+        self.reset()
+
+    def reset(self):
+        self.fringe_trough_voltage = None
+        self.fringe_peak_voltage = None
+        self.was_dark = False
+        self.dark_counter = 0
+        self.bright_counter = 0
+        self.last_count_time = 0.0
+        self.accumulated_fringes = 0
+
+    def update(self, voltage):
+        smooth_voltage = voltage
+        
+        if self.fringe_trough_voltage is None:
+            self.fringe_trough_voltage = smooth_voltage
+            self.fringe_peak_voltage = smooth_voltage
+            return False
+            
+        if self.fringe_peak_voltage is None:
+            self.fringe_peak_voltage = smooth_voltage
+            
+        cooldown_ok = (time.time() - self.last_count_time) > self.sample_interval_s
+        
+        if not self.was_dark:
+            if smooth_voltage > self.fringe_peak_voltage:
+                self.fringe_peak_voltage = smooth_voltage
+                
+            drop_from_peak = self.fringe_peak_voltage - smooth_voltage
+            if drop_from_peak >= self.fringe_rearm_threshold_voltage:
+                self.dark_counter += 1
+                self.fringe_trough_voltage = min(self.fringe_trough_voltage, smooth_voltage)
+            else:
+                self.dark_counter = 0
+                
+            if self.dark_counter >= 1:
+                self.was_dark = True
+                self.fringe_trough_voltage = smooth_voltage
+                self.bright_counter = 0
+            return False
+            
+        if smooth_voltage < self.fringe_trough_voltage:
+            self.fringe_trough_voltage = smooth_voltage
+            self.bright_counter = 0
+            return False
+            
+        rise_from_trough = smooth_voltage - self.fringe_trough_voltage
+        if rise_from_trough >= self.fringe_rise_threshold_voltage:
+            self.bright_counter += 1
+        else:
+            self.bright_counter = 0
+            
+        if self.was_dark and self.bright_counter >= 1 and cooldown_ok:
+            self.accumulated_fringes += 1
+            self.was_dark = False
+            self.last_count_time = time.time()
+            self.dark_counter = 0
+            self.bright_counter = 0
+            self.fringe_peak_voltage = smooth_voltage
+            self.fringe_trough_voltage = smooth_voltage
+            return True
+            
+        return False
+
+
 class HomodyneQuadratureCounter:
     def __init__(
         self,
@@ -146,6 +298,7 @@ class HomodyneQuadratureCounter:
         min_reference_signal=MIN_REFERENCE_SIGNAL,
         fringe_distance_mm=None
     ):
+        self.lock = threading.Lock()
         self.phase_direction_sign = 1 if phase_direction_sign >= 0 else -1
         self.min_signal_radius = min_signal_radius
         self.min_reference_signal = min_reference_signal
@@ -164,42 +317,47 @@ class HomodyneQuadratureCounter:
         self.total_abs_fringes = 0
 
     def calibrate_from_samples(self, raw_samples):
-        if not raw_samples:
-            raise ValueError("No calibration samples were collected.")
+        with self.lock:
+            if not raw_samples:
+                raise ValueError("No calibration samples were collected.")
 
-        corrected_samples = [
-            self.reference_corrected_values(*sample)
-            for sample in raw_samples
-            if abs(sample[2]) >= self.min_reference_signal
-        ]
+            corrected_samples = [
+                self.reference_corrected_values(*sample)
+                for sample in raw_samples
+                if abs(sample[2]) >= self.min_reference_signal
+            ]
 
-        if not corrected_samples:
-            raise ValueError("Reference diode signal is too low.")
+            if not corrected_samples:
+                raise ValueError("Reference diode signal is too low.")
 
-        s1_values = [sample[0] for sample in corrected_samples]
-        s2_values = [sample[1] for sample in corrected_samples]
-        ref_values = [sample[2] for sample in raw_samples]
+            s1_values = [sample[0] for sample in corrected_samples]
+            s2_values = [sample[1] for sample in corrected_samples]
+            ref_values = [sample[2] for sample in raw_samples]
 
-        self.offset_s1 = (min(s1_values) + max(s1_values)) / 2
-        self.offset_s2 = (min(s2_values) + max(s2_values)) / 2
-        self.offset_ref = (min(ref_values) + max(ref_values)) / 2
+            self.offset_s1 = (min(s1_values) + max(s1_values)) / 2
+            self.offset_s2 = (min(s2_values) + max(s2_values)) / 2
+            self.offset_ref = (min(ref_values) + max(ref_values)) / 2
 
-        self.scale_s1 = (max(s1_values) - min(s1_values)) / 2
-        self.scale_s2 = (max(s2_values) - min(s2_values)) / 2
-        self.scale_ref = (max(ref_values) - min(ref_values)) / 2
+            self.scale_s1 = (max(s1_values) - min(s1_values)) / 2
+            self.scale_s2 = (max(s2_values) - min(s2_values)) / 2
+            self.scale_ref = (max(ref_values) - min(ref_values)) / 2
 
-        if self.scale_s1 <= 1e-12:
-            self.scale_s1 = 1.0
+            if self.scale_s1 <= 1e-12:
+                self.scale_s1 = 1.0
 
-        if self.scale_s2 <= 1e-12:
-            self.scale_s2 = 1.0
+            if self.scale_s2 <= 1e-12:
+                self.scale_s2 = 1.0
 
-        if self.scale_ref <= 1e-12:
-            self.scale_ref = 1.0
+            if self.scale_ref <= 1e-12:
+                self.scale_ref = 1.0
 
-        self.reset()
+            self._reset_unlocked()
 
     def reset(self):
+        with self.lock:
+            self._reset_unlocked()
+
+    def _reset_unlocked(self):
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
         self.signed_fringes = 0
@@ -221,37 +379,86 @@ class HomodyneQuadratureCounter:
         return ref_corrected_s1, ref_corrected_s2, s1, s2
 
     def update(self, raw_s1, raw_s2, raw_ref):
-        timestamp = time.time()
+        with self.lock:
+            timestamp = time.time()
 
-        if abs(raw_ref) < self.min_reference_signal:
-            return HomodyneSample(
-                timestamp=timestamp,
-                raw_s1=raw_s1,
-                raw_s2=raw_s2,
-                raw_ref=raw_ref,
-                ref_corrected_s1=0.0,
-                ref_corrected_s2=0.0,
-                s1=0.0,
-                s2=0.0,
-                radius=0.0,
-                phase_rad=0.0,
-                unwrapped_phase_rad=self.unwrapped_phase_rad,
-                delta_phase_rad=0.0,
-                fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
-                signed_fringes=self.signed_fringes,
-                fringe_delta=0,
-                direction="reference_low",
-                valid=False
+            if abs(raw_ref) < self.min_reference_signal:
+                return HomodyneSample(
+                    timestamp=timestamp,
+                    raw_s1=raw_s1,
+                    raw_s2=raw_s2,
+                    raw_ref=raw_ref,
+                    ref_corrected_s1=0.0,
+                    ref_corrected_s2=0.0,
+                    s1=0.0,
+                    s2=0.0,
+                    radius=0.0,
+                    phase_rad=0.0,
+                    unwrapped_phase_rad=self.unwrapped_phase_rad,
+                    delta_phase_rad=0.0,
+                    fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
+                    signed_fringes=self.signed_fringes,
+                    fringe_delta=0,
+                    direction="reference_low",
+                    valid=False
+                )
+
+            ref_corrected_s1, ref_corrected_s2, s1, s2 = self.normalize(
+                raw_s1,
+                raw_s2,
+                raw_ref
             )
+            radius = math.hypot(s1, s2)
 
-        ref_corrected_s1, ref_corrected_s2, s1, s2 = self.normalize(
-            raw_s1,
-            raw_s2,
-            raw_ref
-        )
-        radius = math.hypot(s1, s2)
+            if radius < self.min_signal_radius:
+                return HomodyneSample(
+                    timestamp=timestamp,
+                    raw_s1=raw_s1,
+                    raw_s2=raw_s2,
+                    raw_ref=raw_ref,
+                    ref_corrected_s1=ref_corrected_s1,
+                    ref_corrected_s2=ref_corrected_s2,
+                    s1=s1,
+                    s2=s2,
+                    radius=radius,
+                    phase_rad=0.0,
+                    unwrapped_phase_rad=self.unwrapped_phase_rad,
+                    delta_phase_rad=0.0,
+                    fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
+                    signed_fringes=self.signed_fringes,
+                    fringe_delta=0,
+                    direction="signal_low",
+                    valid=False
+                )
 
-        if radius < self.min_signal_radius:
+            phase_rad = self.phase_direction_sign * math.atan2(s2, s1)
+
+            if self.previous_phase_rad is None:
+                self.previous_phase_rad = phase_rad
+                delta_phase_rad = 0.0
+            else:
+                delta_phase_rad = wrap_to_pi(
+                    phase_rad - self.previous_phase_rad
+                )
+                self.unwrapped_phase_rad += delta_phase_rad
+                self.previous_phase_rad = phase_rad
+
+            fringe_position = self.unwrapped_phase_rad / (2 * math.pi)
+            new_signed_fringes = completed_signed_fringes(fringe_position)
+            fringe_delta = new_signed_fringes - self.signed_fringes
+
+            if fringe_delta != 0:
+                self.total_abs_fringes += abs(fringe_delta)
+
+            self.signed_fringes = new_signed_fringes
+
+            if delta_phase_rad > 0:
+                direction = "forward"
+            elif delta_phase_rad < 0:
+                direction = "backward"
+            else:
+                direction = "none"
+
             return HomodyneSample(
                 timestamp=timestamp,
                 raw_s1=raw_s1,
@@ -262,81 +469,39 @@ class HomodyneQuadratureCounter:
                 s1=s1,
                 s2=s2,
                 radius=radius,
-                phase_rad=0.0,
+                phase_rad=phase_rad,
                 unwrapped_phase_rad=self.unwrapped_phase_rad,
-                delta_phase_rad=0.0,
-                fringe_position=self.unwrapped_phase_rad / (2 * math.pi),
+                delta_phase_rad=delta_phase_rad,
+                fringe_position=fringe_position,
                 signed_fringes=self.signed_fringes,
-                fringe_delta=0,
-                direction="signal_low",
-                valid=False
+                fringe_delta=fringe_delta,
+                direction=direction,
+                valid=True
             )
-
-        phase_rad = self.phase_direction_sign * math.atan2(s2, s1)
-
-        if self.previous_phase_rad is None:
-            self.previous_phase_rad = phase_rad
-            delta_phase_rad = 0.0
-        else:
-            delta_phase_rad = wrap_to_pi(
-                phase_rad - self.previous_phase_rad
-            )
-            self.unwrapped_phase_rad += delta_phase_rad
-            self.previous_phase_rad = phase_rad
-
-        fringe_position = self.unwrapped_phase_rad / (2 * math.pi)
-        new_signed_fringes = completed_signed_fringes(fringe_position)
-        fringe_delta = new_signed_fringes - self.signed_fringes
-
-        if fringe_delta != 0:
-            self.total_abs_fringes += abs(fringe_delta)
-
-        self.signed_fringes = new_signed_fringes
-
-        if delta_phase_rad > 0:
-            direction = "forward"
-        elif delta_phase_rad < 0:
-            direction = "backward"
-        else:
-            direction = "none"
-
-        return HomodyneSample(
-            timestamp=timestamp,
-            raw_s1=raw_s1,
-            raw_s2=raw_s2,
-            raw_ref=raw_ref,
-            ref_corrected_s1=ref_corrected_s1,
-            ref_corrected_s2=ref_corrected_s2,
-            s1=s1,
-            s2=s2,
-            radius=radius,
-            phase_rad=phase_rad,
-            unwrapped_phase_rad=self.unwrapped_phase_rad,
-            delta_phase_rad=delta_phase_rad,
-            fringe_position=fringe_position,
-            signed_fringes=self.signed_fringes,
-            fringe_delta=fringe_delta,
-            direction=direction,
-            valid=True
-        )
 
     def signed_distance_mm(self):
-        if self.fringe_distance_mm is None:
-            return None
+        with self.lock:
+            if self.fringe_distance_mm is None:
+                return None
 
-        return (
-            self.unwrapped_phase_rad
-            / (2 * math.pi)
-            * self.fringe_distance_mm
-        )
+            return (
+                self.unwrapped_phase_rad
+                / (2 * math.pi)
+                * self.fringe_distance_mm
+            )
 
     def correction_to_zero_mm(self, stage_direction_sign=1):
-        distance_mm = self.signed_distance_mm()
+        with self.lock:
+            distance_mm = (
+                self.unwrapped_phase_rad
+                / (2 * math.pi)
+                * self.fringe_distance_mm
+            ) if self.fringe_distance_mm is not None else None
 
-        if distance_mm is None:
-            return None
+            if distance_mm is None:
+                return None
 
-        return -stage_direction_sign * distance_mm
+            return -stage_direction_sign * distance_mm
 
 
 class HomodyneMonitor:
@@ -354,6 +519,7 @@ class HomodyneMonitor:
             phase_direction_sign=phase_direction_sign,
             fringe_distance_mm=fringe_distance_mm
         )
+        self.single_counter = SingleSignalFringeCounter(sample_interval_s=SAMPLE_INTERVAL_S)
 
     def connect(self):
         return self.reader.connect()
@@ -362,7 +528,8 @@ class HomodyneMonitor:
         self,
         seconds=CALIBRATION_SECONDS,
         sample_interval_s=SAMPLE_INTERVAL_S,
-        should_continue=None
+        should_continue=None,
+        sample_callback=None
     ):
         samples = []
         start_time = time.time()
@@ -371,17 +538,34 @@ class HomodyneMonitor:
             if should_continue is not None and not should_continue():
                 break
 
-            samples.append(self.reader.read())
+            val = self.reader.read()
+            samples.append(val)
+            if sample_callback is not None:
+                sample_callback(
+                    val,
+                    time.time() - start_time,
+                    seconds
+                )
             time.sleep(sample_interval_s)
 
         if not samples and should_continue is not None and not should_continue():
             return samples
 
         self.counter.calibrate_from_samples(samples)
+        s1_corrected = []
+        for raw_s1, raw_s2, raw_ref in samples:
+            if abs(raw_ref) >= self.counter.min_reference_signal:
+                s1_corrected.append(raw_s1 / raw_ref)
+        self.single_counter.calibrate(s1_corrected)
         return samples
 
     def read(self):
         raw_s1, raw_s2, raw_ref = self.reader.read()
+        if abs(raw_ref) >= self.counter.min_reference_signal:
+            ref_corrected_s1 = raw_s1 / raw_ref
+        else:
+            ref_corrected_s1 = 0.0
+        self.single_counter.update(ref_corrected_s1)
         return self.counter.update(raw_s1, raw_s2, raw_ref)
 
     def close(self):
@@ -399,7 +583,7 @@ class HomodyneGui:
 
         self.root = ctk.CTk()
         self.root.title("Homodyne Quadrature Monitor")
-        self.root.geometry("700x900")
+        self.root.geometry("1200x950")
         self.root.configure(fg_color="white")
 
         self.scroll = ctk.CTkScrollableFrame(
@@ -423,6 +607,7 @@ class HomodyneGui:
             wavelength_nm=self.laser_wavelength_nm
         )
         self.monitoring = False
+        self.calibrating = False
         self.measurement_thread = None
         self.raw_s1_history = []
         self.raw_s2_history = []
@@ -438,6 +623,14 @@ class HomodyneGui:
         self.stage_connecting = False
         self.stage_position_mm = None
         self.stage_command_active = False
+
+        self.total_stage_movement = 0.0
+        self.stage_movement_before_move = 0.0
+        self.current_stage_movement_for_compare = 0.0
+        self.stage_start_position = 0.0
+        self.stage_target_position = None
+        self.stage_remaining_to_drive = 0.0
+        self.stage_remaining_known = True
 
         self.latest_sample = None
         self.latest_distance_mm = None
@@ -631,62 +824,275 @@ class HomodyneGui:
         )
         self.btn_stage_check.grid(row=0, column=3, padx=5)
 
-        row_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
-        row_frame.pack(fill="x", padx=18, pady=8)
+        # Columns layout container
+        self.cols_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        self.cols_frame.pack(fill="both", expand=True, padx=18, pady=8)
 
-        values_frame = ctk.CTkFrame(row_frame, fg_color="#EEEEEE")
-        values_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        # Left Column for Raw plots
+        self.left_col = ctk.CTkFrame(self.cols_frame, fg_color="transparent")
+        self.left_col.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
-        lock_frame = ctk.CTkFrame(row_frame, fg_color="#EEEEEE")
-        lock_frame.pack(side="left", fill="both", expand=True, padx=(8, 4))
+        # Right Column for Displays and Lissajous
+        self.right_col = ctk.CTkFrame(self.cols_frame, fg_color="transparent")
+        self.right_col.pack(side="left", fill="both", expand=True, padx=(10, 0))
 
-        self.label_phase = self.make_value_label(
-            values_frame,
-            "Phase",
-            "phase_rad = atan2(S2_norm, S1_norm) = 0.00000 rad"
+        # Raw Signal Plots Frame (Left Column)
+        plot_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
+        plot_frame.pack(fill="both", expand=True, pady=4)
+
+        ctk.CTkLabel(
+            plot_frame,
+            text="Raw Signal Time Traces",
+            font=("Arial", 15, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(10, 4))
+
+        if plt is None or FigureCanvasTkAgg is None:
+            ctk.CTkLabel(
+                plot_frame,
+                text="Matplotlib is required for live plotting.",
+                font=("Arial", 11),
+                text_color=RED_COLOR
+            ).pack(pady=8)
+            self.plot_canvas = None
+            self.plot_axes = None
+        else:
+            self.plot_figure = plt.Figure(figsize=(5.0, 6.0), dpi=100)
+            axes = self.plot_figure.subplots(3, 1, sharex=True)
+            self.plot_axes = {
+                'S1_raw': axes[0],
+                'S2_raw': axes[1],
+                'Ref_raw': axes[2]
+            }
+
+            plot_specs = {
+                'S1_raw': ("S1 raw voltage", 'blue', 'S1'),
+                'S2_raw': ("S2 raw voltage", 'green', 'S2'),
+                'Ref_raw': ("Reference raw voltage", 'red', 'Ref')
+            }
+
+            self.plot_lines = {}
+            for key in ['S1_raw', 'S2_raw', 'Ref_raw']:
+                axis = self.plot_axes[key]
+                title, color, label = plot_specs[key]
+                axis.set_title(title)
+                axis.grid(True, linestyle=':', alpha=0.6)
+                axis.set_ylabel("Voltage")
+                self.plot_lines[key] = axis.plot(
+                    [],
+                    [],
+                    color=color,
+                    label=label
+                )[0]
+                axis.legend(loc="upper right")
+
+            axes[-1].set_xlabel("Samples")
+            self.plot_figure.tight_layout()
+            self.plot_canvas = FigureCanvasTkAgg(
+                self.plot_figure,
+                master=plot_frame
+            )
+            self.plot_canvas.draw()
+            self.plot_canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+
+        # Single-Signal Fringe Counter Panel (Right Column)
+        self.single_fringe_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
+        self.single_fringe_frame.pack(fill="x", pady=4, padx=8)
+
+        ctk.CTkLabel(
+            self.single_fringe_frame,
+            text="Single-Signal Fringe Counter (Signal 1)",
+            font=("Arial", 14, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(8, 4))
+
+        self.label_single_fringes = ctk.CTkLabel(
+            self.single_fringe_frame,
+            text="S1 Fringe Count: 0",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
-        self.label_s1_norm = self.make_value_label(
-            values_frame,
-            "S1 norm",
-            "S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = n/a"
+        self.label_single_fringes.pack(pady=2)
+
+        self.label_single_distance = ctk.CTkLabel(
+            self.single_fringe_frame,
+            text="S1 Calculated Distance: 0.000000 mm",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
-        self.label_s2_norm = self.make_value_label(
-            values_frame,
-            "S2 norm",
-            "S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = n/a"
+        self.label_single_distance.pack(pady=2)
+
+        self.label_single_thresholds = ctk.CTkLabel(
+            self.single_fringe_frame,
+            text="S1 Thresholds: Min/Max = n/a, Amplitude = n/a",
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
         )
-        self.label_unwrapped_phase = self.make_value_label(
+        self.label_single_thresholds.pack(pady=2)
+
+        # Lissajous Circle Frame (Right Column)
+        self.plot_frame_circle = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
+        self.plot_frame_circle.pack(fill="both", expand=True, pady=4)
+
+        ctk.CTkLabel(
+            self.plot_frame_circle,
+            text="Lissajous Circle & Angle Visualizer",
+            font=("Arial", 15, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(10, 4))
+
+        if plt is None or FigureCanvasTkAgg is None:
+            self.plot_canvas_circle = None
+            self.axis_circle = None
+        else:
+            self.plot_figure_circle = plt.Figure(figsize=(4.0, 4.0), dpi=100)
+            self.axis_circle = self.plot_figure_circle.add_subplot(111)
+
+            # Setup the Lissajous circle plot
+            self.axis_circle.set_title("Lissajous Circle (S1 vs S2)")
+            self.axis_circle.set_xlabel("S1 (normalized)")
+            self.axis_circle.set_ylabel("S2 (normalized)")
+            self.axis_circle.grid(True, linestyle=':', alpha=0.6)
+            self.axis_circle.set_aspect('equal', adjustable='box')
+            self.axis_circle.set_xlim(-1.5, 1.5)
+            self.axis_circle.set_ylim(-1.5, 1.5)
+
+            # Draw reference unit circle in grey
+            ref_theta = [t * 2 * math.pi / 100 for t in range(101)]
+            ref_x = [math.cos(t) for t in ref_theta]
+            ref_y = [math.sin(t) for t in ref_theta]
+            self.axis_circle.plot(ref_x, ref_y, color='gray', linestyle='--', alpha=0.5, label='Ref Circle')
+
+            # Trace line (history of positions on the circle)
+            self.plot_lines['circle_trace'] = self.axis_circle.plot(
+                [],
+                [],
+                color='purple',
+                alpha=0.6,
+                label='Trace'
+            )[0]
+
+            # Current position point (large red dot)
+            self.plot_lines['circle_current'] = self.axis_circle.plot(
+                [],
+                [],
+                'ro',
+                markersize=8,
+                label='Current'
+            )[0]
+
+            # Pointer line (clock hand)
+            self.plot_lines['circle_pointer'] = self.axis_circle.plot(
+                [],
+                [],
+                color='orange',
+                linestyle='-',
+                linewidth=2,
+                label='Pointer'
+            )[0]
+
+            # Directional quiver arrow
+            self.plot_quiver = self.axis_circle.quiver(
+                [0], [0], [0], [0],
+                angles='xy', scale_units='xy', scale=1,
+                color='green', width=0.015, headwidth=4, headlength=5
+            )
+            self.plot_quiver.set_visible(False)
+
+            self.axis_circle.legend(loc="upper right")
+            self.plot_figure_circle.tight_layout()
+            self.plot_canvas_circle = FigureCanvasTkAgg(
+                self.plot_figure_circle,
+                master=self.plot_frame_circle
+            )
+            self.plot_canvas_circle.draw()
+            self.plot_canvas_circle.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+
+        # Quadrature Homodyne values frame (Right Column)
+        values_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
+        values_frame.pack(fill="x", pady=4, padx=8)
+
+        ctk.CTkLabel(
             values_frame,
-            "Unwrapped phase",
-            "unwrapped_phase_rad += delta_phase_rad = 0.00000 rad"
-        )
-        self.label_fringe_position = self.make_value_label(
+            text="Quadrature Homodyne Monitor",
+            font=("Arial", 14, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(8, 4))
+
+        self.label_phase = ctk.CTkLabel(
             values_frame,
-            "Fringe position",
-            "fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000"
+            text="phase_rad = atan2(S2_norm, S1_norm) = 0.00000 rad",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
-        self.label_fringes = self.make_value_label(
+        self.label_phase.pack(pady=2)
+
+        self.label_s1_norm = ctk.CTkLabel(
             values_frame,
-            "Completed fringes",
-            "signed_fringes = 0"
+            text="S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = n/a",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
-        self.label_direction = self.make_value_label(
+        self.label_s1_norm.pack(pady=2)
+
+        self.label_s2_norm = ctk.CTkLabel(
             values_frame,
-            "Direction",
-            "direction = none"
+            text="S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = n/a",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
-        self.label_distance = self.make_value_label(
+        self.label_s2_norm.pack(pady=2)
+
+        self.label_unwrapped_phase = ctk.CTkLabel(
             values_frame,
-            "Distance",
-            "distance_mm = fringe_position * fringe_distance_mm = n/a"
+            text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
         )
+        self.label_unwrapped_phase.pack(pady=2)
+
+        self.label_fringe_position = ctk.CTkLabel(
+            values_frame,
+            text="fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_fringe_position.pack(pady=2)
+
+        self.label_fringes = ctk.CTkLabel(
+            values_frame,
+            text="signed_fringes = 0",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_fringes.pack(pady=2)
+
+        self.label_direction = ctk.CTkLabel(
+            values_frame,
+            text="Direction: Still",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_direction.pack(pady=2)
+
+        self.label_distance = ctk.CTkLabel(
+            values_frame,
+            text="distance_mm = fringe_position * fringe_distance_mm = n/a",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_distance.pack(pady=2)
+
+        # Stage lock and position status frame (Right Column)
+        lock_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
+        lock_frame.pack(fill="x", pady=4, padx=8)
 
         ctk.CTkLabel(
             lock_frame,
-            text="Lock",
-            font=("Arial", 16, "bold"),
+            text="Stage Lock & Status",
+            font=("Arial", 14, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=(10, 4))
+        ).pack(pady=(8, 4))
 
         self.label_lock_status = ctk.CTkLabel(
             lock_frame,
@@ -718,7 +1124,7 @@ class HomodyneGui:
             font=("Arial", 12, "bold"),
             text_color=TEXT_COLOR
         )
-        self.label_lock_correction.pack(pady=(2, 10))
+        self.label_lock_correction.pack(pady=2)
 
         self.label_stage_status = ctk.CTkLabel(
             lock_frame,
@@ -734,7 +1140,53 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_stage_position.pack(pady=(2, 10))
+        self.label_stage_position.pack(pady=2)
+
+        # Stage movement comparison frame (Right Column)
+        self.compare_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
+        self.compare_frame.pack(fill="x", pady=4, padx=8)
+
+        ctk.CTkLabel(
+            self.compare_frame,
+            text="Stage Movement Comparison",
+            font=("Arial", 14, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(8, 4))
+
+        self.compare_driven_frame = ctk.CTkFrame(self.compare_frame, fg_color="transparent")
+        self.compare_driven_frame.pack(pady=2)
+
+        self.label_compare_driven = ctk.CTkLabel(
+            self.compare_driven_frame,
+            text="Driven: 0.000000 mm",
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
+        )
+        self.label_compare_driven.grid(row=0, column=0, padx=14)
+
+        self.label_still_to_drive = ctk.CTkLabel(
+            self.compare_driven_frame,
+            text="Still to drive: 0.000000 mm",
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
+        )
+        self.label_still_to_drive.grid(row=0, column=1, padx=14)
+
+        self.label_compare_calculated = ctk.CTkLabel(
+            self.compare_frame,
+            text="Calculated from Fringes: 0.000000 mm",
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
+        )
+        self.label_compare_calculated.pack(pady=2)
+
+        self.label_compare_difference = ctk.CTkLabel(
+            self.compare_frame,
+            text="Difference: n/a",
+            font=("Arial", 13, "bold"),
+            text_color=TEXT_COLOR
+        )
+        self.label_compare_difference.pack(pady=2)
 
         channel_text = (
             f"Channels: S1={PHOTODIODE_CHANNEL_S1}, "
@@ -746,66 +1198,7 @@ class HomodyneGui:
             text=channel_text,
             font=("Arial", 10),
             text_color=TEXT_COLOR
-        ).pack(pady=(8, 0))
-
-        plot_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
-        plot_frame.pack(fill="both", padx=18, pady=(8, 16), expand=True)
-
-        ctk.CTkLabel(
-            plot_frame,
-            text="Live outputs",
-            font=("Arial", 15, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(10, 4))
-
-        if plt is None or FigureCanvasTkAgg is None:
-            ctk.CTkLabel(
-                plot_frame,
-                text="Matplotlib is required for live plotting.",
-                font=("Arial", 11),
-                text_color=RED_COLOR
-            ).pack(pady=8)
-            self.plot_canvas = None
-            self.plot_axis = None
-            self.plot_axes = None
-        else:
-            self.plot_figure = plt.Figure(figsize=(8, 5.6), dpi=100)
-            axes = self.plot_figure.subplots(3, 1, sharex=True)
-            self.plot_axis = axes[0]
-            self.plot_axes = {
-                'S1_raw': axes[0],
-                'S2_raw': axes[1],
-                'Ref_raw': axes[2]
-            }
-
-            plot_specs = {
-                'S1_raw': ("S1 raw voltage", 'blue', 'S1'),
-                'S2_raw': ("S2 raw voltage", 'green', 'S2'),
-                'Ref_raw': ("Reference raw voltage", 'red', 'Ref')
-            }
-
-            self.plot_lines = {}
-            for key, axis in self.plot_axes.items():
-                title, color, label = plot_specs[key]
-                axis.set_title(title)
-                axis.grid(True, linestyle=':', alpha=0.6)
-                axis.set_ylabel("Voltage")
-                self.plot_lines[key] = axis.plot(
-                    [],
-                    [],
-                    color=color,
-                    label=label
-                )[0]
-                axis.legend(loc="upper right")
-
-            axes[-1].set_xlabel("Samples")
-            self.plot_figure.tight_layout()
-            self.plot_canvas = FigureCanvasTkAgg(
-                self.plot_figure,
-                master=plot_frame
-            )
-            self.plot_canvas.draw()
-            self.plot_canvas.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
+        ).pack(pady=(8, 8))
 
     def make_value_label(self, parent, name, initial_value):
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -954,39 +1347,79 @@ class HomodyneGui:
         self.stage_command_active = False
         self.set_stage_controls_enabled(True)
 
-    def queue_sample_display(self, sample, distance_mm, force=False):
-        with self.sample_display_lock:
-            self.pending_sample = sample
-            self.pending_distance_mm = distance_mm
+    def update_stage_ui_from_thread(self, position_mm, total_stage_movement):
+        self.label_stage_position.configure(
+            text=f"Stage position: {position_mm:.6f} mm"
+        )
+        self.update_still_to_drive_label(position_mm)
+        self.update_comparison_labels(total_stage_movement)
 
-            if self.sample_display_scheduled:
-                return
+    def update_comparison_labels(self, driven_mm=None):
+        if driven_mm is None:
+            driven_mm = self.current_stage_movement_for_compare
 
-            now = time.monotonic()
-            elapsed_s = now - self.last_sample_display_time
-            delay_s = 0.0 if force else max(
-                0.0,
-                UI_UPDATE_INTERVAL_S - elapsed_s
-            )
-            self.sample_display_scheduled = True
+        driven_distance_mm = abs(driven_mm)
+        calculated_mm = 0.0
+        if self.monitor is not None and self.monitor.counter is not None:
+            dist = self.monitor.counter.signed_distance_mm()
+            if dist is not None:
+                calculated_mm = abs(dist)
 
-        self.root.after(
-            int(delay_s * 1000),
-            self.flush_sample_display
+        difference_mm = driven_distance_mm - calculated_mm
+        self.label_compare_driven.configure(
+            text=f"Driven: {driven_distance_mm:.6f} mm"
+        )
+        self.label_compare_calculated.configure(
+            text=f"Calculated from Fringes: {calculated_mm:.6f} mm"
+        )
+        self.label_compare_difference.configure(
+            text=f"Difference: {difference_mm:.6f} mm"
         )
 
-    def flush_sample_display(self):
-        with self.sample_display_lock:
-            sample = self.pending_sample
-            distance_mm = self.pending_distance_mm
-            self.pending_sample = None
-            self.pending_distance_mm = None
-            self.sample_display_scheduled = False
+    def update_still_to_drive_label(self, pos=None):
+        target_position = self.stage_target_position
+        if target_position is None:
+            self.stage_remaining_to_drive = 0.0
+            self.stage_remaining_known = (
+                not self.stage_connected
+                or self.stage is None
+                or not self.stage.is_moving
+            )
+        else:
+            self.stage_remaining_known = True
+            if pos is None:
+                if self.stage_connected and self.stage is not None:
+                    pos = self.stage.get_position()
+                else:
+                    pos = target_position
+            self.stage_remaining_to_drive = abs(target_position - pos)
+            if self.stage_remaining_to_drive < 1e-6:
+                self.stage_remaining_to_drive = 0.0
 
-        self.last_sample_display_time = time.monotonic()
+        if hasattr(self, "label_still_to_drive"):
+            if self.stage_remaining_known:
+                label_text = f"Still to drive: {self.stage_remaining_to_drive:.6f} mm"
+            else:
+                label_text = "Still to drive: target unknown"
+            self.label_still_to_drive.configure(text=label_text)
 
-        if sample is not None:
-            self.update_sample_display(sample, distance_mm)
+    def set_stage_target_position(self, target_mm, current_pos=None):
+        self.stage_target_position = target_mm
+        if current_pos is None:
+            if self.stage_connected and self.stage is not None:
+                current_pos = self.stage.get_position()
+            else:
+                current_pos = target_mm
+        self.update_still_to_drive_label(current_pos)
+
+    def clear_stage_target_position(self):
+        self.stage_target_position = None
+        self.stage_remaining_to_drive = 0.0
+        self.stage_remaining_known = True
+        if hasattr(self, "label_still_to_drive"):
+            self.label_still_to_drive.configure(
+                text="Still to drive: 0.000000 mm"
+            )
 
     def set_status_from_thread(self, text, color=TEXT_COLOR):
         self.root.after(
@@ -1207,15 +1640,17 @@ class HomodyneGui:
         self.start_stage_move_by(direction * self.stage_step_mm)
 
     def manual_stage_move_worker(self):
+        movement_base = self.stage_movement_before_move
         while self.stage is not None and self.stage.is_moving:
             position_mm = self.stage.get_position()
+            moved = abs(position_mm - self.stage_start_position)
+            self.total_stage_movement = movement_base + moved
+            self.current_stage_movement_for_compare = self.total_stage_movement
 
             self.root.after(
                 0,
-                lambda p=position_mm:
-                self.label_stage_position.configure(
-                    text=f"Stage position: {p:.6f} mm"
-                )
+                lambda p=position_mm, t=self.total_stage_movement:
+                self.update_stage_ui_from_thread(p, t)
             )
 
             time.sleep(0.05)
@@ -1224,6 +1659,9 @@ class HomodyneGui:
 
         if self.stage is not None and self.stage_connected:
             position_mm = self.stage.get_position()
+            moved = abs(position_mm - self.stage_start_position)
+            self.total_stage_movement = movement_base + moved
+            self.current_stage_movement_for_compare = self.total_stage_movement
 
         self.root.after(
             0,
@@ -1234,9 +1672,12 @@ class HomodyneGui:
     def finish_manual_stage_move(self, position_mm):
         if position_mm is not None:
             self.stage_position_mm = position_mm
-            self.label_stage_position.configure(
-                text=f"Stage position: {position_mm:.6f} mm"
-            )
+            moved = abs(position_mm - self.stage_start_position)
+            self.total_stage_movement = self.stage_movement_before_move + moved
+            self.current_stage_movement_for_compare = self.total_stage_movement
+            self.update_stage_ui_from_thread(position_mm, self.total_stage_movement)
+
+        self.clear_stage_target_position()
 
         self.label_stage_status.configure(
             text="Stage: connected",
@@ -1315,6 +1756,10 @@ class HomodyneGui:
 
         target_mm = self.stage.clamp_position(target_mm)
 
+        self.stage_start_position = start_pos
+        self.stage_movement_before_move = self.total_stage_movement
+        self.set_stage_target_position(target_mm, start_pos)
+
         if abs(target_mm - start_pos) < 1e-12:
             self.status.configure(
                 text="Status: stage already at target",
@@ -1323,6 +1768,7 @@ class HomodyneGui:
             self.label_stage_position.configure(
                 text=f"Stage position: {start_pos:.6f} mm"
             )
+            self.clear_stage_target_position()
             return
 
         self.stage_command_active = True
@@ -1334,6 +1780,7 @@ class HomodyneGui:
                 text="Status: stage move failed",
                 text_color=RED_COLOR
             )
+            self.clear_stage_target_position()
             return
 
         self.status.configure(
@@ -1396,6 +1843,10 @@ class HomodyneGui:
         start_pos = self.stage.get_position()
         target_mm = self.stage.clamp_position(target_mm)
 
+        self.stage_start_position = start_pos
+        self.stage_movement_before_move = self.total_stage_movement
+        self.set_stage_target_position(target_mm, start_pos)
+
         if abs(target_mm - start_pos) < 1e-12:
             self.status.configure(
                 text="Status: stage already at target",
@@ -1404,6 +1855,7 @@ class HomodyneGui:
             self.label_stage_position.configure(
                 text=f"Stage position: {start_pos:.6f} mm"
             )
+            self.clear_stage_target_position()
             return
 
         self.stage_command_active = True
@@ -1664,6 +2116,10 @@ class HomodyneGui:
             if abs(target_pos - current_pos) < 1e-12:
                 break
 
+            self.stage_start_position = current_pos
+            self.stage_movement_before_move = self.total_stage_movement
+            self.set_stage_target_position(target_pos, current_pos)
+
             if not self.stage.move_absolute(target_pos):
                 self.root.after(
                     0,
@@ -1673,8 +2129,10 @@ class HomodyneGui:
                         text_color=RED_COLOR
                     )
                 )
+                self.clear_stage_target_position()
                 break
 
+            movement_base = self.stage_movement_before_move
             while self.stage.is_moving and self.monitoring:
                 try:
                     sample = self.monitor.read()
@@ -1683,19 +2141,42 @@ class HomodyneGui:
                     sample = None
                     distance_mm = None
 
-                if sample is not None:
-                    self.queue_sample_display(sample, distance_mm)
+                position_mm = self.stage.get_position()
+                moved = abs(position_mm - self.stage_start_position)
+                self.total_stage_movement = movement_base + moved
+                self.current_stage_movement_for_compare = self.total_stage_movement
+
+                with self.sample_display_lock:
+                    if sample is not None:
+                        self.latest_sample = sample
+                        self.latest_distance_mm = distance_mm
+                        self.raw_s1_history.append(sample.raw_s1)
+                        self.raw_s2_history.append(sample.raw_s2)
+                        self.raw_ref_history.append(sample.raw_ref)
+                        if len(self.raw_s1_history) > 300:
+                            self.raw_s1_history.pop(0)
+                            self.raw_s2_history.pop(0)
+                            self.raw_ref_history.pop(0)
+
+                self.root.after(
+                    0,
+                    lambda p=position_mm, t=self.total_stage_movement:
+                    self.update_stage_ui_from_thread(p, t)
+                )
 
                 time.sleep(SAMPLE_INTERVAL_S)
 
             position_mm = self.stage.get_position()
+            moved = abs(position_mm - self.stage_start_position)
+            self.total_stage_movement = movement_base + moved
+            self.current_stage_movement_for_compare = self.total_stage_movement
             self.root.after(
                 0,
-                lambda p=position_mm:
-                self.label_stage_position.configure(
-                    text=f"Stage position: {p:.6f} mm"
-                ) if p is not None else None
+                lambda p=position_mm, t=self.total_stage_movement:
+                self.update_stage_ui_from_thread(p, t)
             )
+
+            self.clear_stage_target_position()
 
             if not self.monitoring:
                 break
@@ -1720,6 +2201,7 @@ class HomodyneGui:
         direction = 1 if target_mm > start_pos else -1
         current_pos = start_pos
         remaining = abs(target_mm - start_pos)
+        movement_base = self.stage_movement_before_move
 
         self.set_status_from_thread(
             (
@@ -1748,12 +2230,26 @@ class HomodyneGui:
 
                 while self.stage is not None and self.stage.is_moving:
                     position_mm = self.stage.get_position()
-                    self.set_stage_position_from_thread(position_mm)
+                    moved = abs(position_mm - self.stage_start_position)
+                    self.total_stage_movement = movement_base + moved
+                    self.current_stage_movement_for_compare = self.total_stage_movement
+                    self.root.after(
+                        0,
+                        lambda p=position_mm, t=self.total_stage_movement:
+                        self.update_stage_ui_from_thread(p, t)
+                    )
                     time.sleep(0.05)
 
                 current_pos = next_target
                 remaining = abs(target_mm - current_pos)
-                self.set_stage_position_from_thread(current_pos)
+                moved = abs(current_pos - self.stage_start_position)
+                self.total_stage_movement = movement_base + moved
+                self.current_stage_movement_for_compare = self.total_stage_movement
+                self.root.after(
+                    0,
+                    lambda p=current_pos, t=self.total_stage_movement:
+                    self.update_stage_ui_from_thread(p, t)
+                )
 
                 if remaining > 1e-12:
                     time.sleep(delay_s)
@@ -1761,17 +2257,141 @@ class HomodyneGui:
             if self.stage is not None and self.stage_connected:
                 current_pos = self.stage.get_position()
                 self.stage_position_mm = current_pos
-                self.set_stage_position_from_thread(current_pos)
+                moved = abs(current_pos - self.stage_start_position)
+                self.total_stage_movement = movement_base + moved
+                self.current_stage_movement_for_compare = self.total_stage_movement
+                self.root.after(
+                    0,
+                    lambda p=current_pos, t=self.total_stage_movement:
+                    self.update_stage_ui_from_thread(p, t)
+                )
 
             self.set_status_from_thread(
                 f"Status: reached {current_pos:.6f} mm",
                 GREEN_COLOR
             )
         finally:
+            self.clear_stage_target_position()
             self.root.after(
                 0,
                 self.finish_stage_command_ui
             )
+
+    def start_ui_loop(self):
+        # Start periodic UI update task
+        self.root.after(int(UI_UPDATE_INTERVAL_S * 1000), self.update_ui_loop)
+
+    def update_ui_loop(self):
+        if not self.monitoring and not self.calibrating:
+            return
+
+        # Retrieve values safely under lock
+        with self.sample_display_lock:
+            sample = self.latest_sample
+            distance_mm = self.latest_distance_mm
+            s1_hist = list(self.raw_s1_history)
+            s2_hist = list(self.raw_s2_history)
+            ref_hist = list(self.raw_ref_history)
+            
+            # Retrieve single counter state
+            single_fringes = self.monitor.single_counter.accumulated_fringes
+            single_distance = single_fringes * self.fringe_distance_mm
+            single_min = self.monitor.single_counter.min_voltage
+            single_max = self.monitor.single_counter.max_voltage
+            single_amp = self.monitor.single_counter.fringe_amplitude_voltage
+            
+            # Progress label if calibrating
+            calibrating = self.calibrating
+            progress_text = getattr(self, 'calibration_progress_text', None)
+
+        if calibrating:
+            if progress_text:
+                self.status.configure(text=progress_text, text_color=ORANGE_COLOR)
+            self.update_plot()
+        elif sample is not None:
+            # Update single signal fringe counter labels (strictly English)
+            self.label_single_fringes.configure(
+                text=f"S1 Fringe Count: {single_fringes}"
+            )
+            self.label_single_distance.configure(
+                text=f"S1 Calculated Distance: {single_distance:+.6f} mm"
+            )
+            self.label_single_thresholds.configure(
+                text=f"S1 Thresholds: Min/Max = {single_min:+.4f}/{single_max:+.4f} V, Amp = {single_amp:.6f} V"
+            )
+
+            # Update quadrature homodyne labels (strictly English)
+            self.label_phase.configure(
+                text=f"phase_rad = atan2(S2_norm, S1_norm) = {sample.phase_rad:+.5f} rad" if sample.valid else "phase_rad = invalid"
+            )
+            if sample.direction == "reference_low":
+                self.label_s1_norm.configure(text="S1_norm = raw_ref too low")
+                self.label_s2_norm.configure(text="S2_norm = raw_ref too low")
+            else:
+                self.label_s1_norm.configure(
+                    text=f"S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = {sample.s1:+.6f}"
+                )
+                self.label_s2_norm.configure(
+                    text=f"S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = {sample.s2:+.6f}"
+                )
+
+            self.label_unwrapped_phase.configure(
+                text=f"unwrapped_phase_rad += delta_phase_rad = {sample.unwrapped_phase_rad:+.5f} rad"
+            )
+            self.label_fringe_position.configure(
+                text=f"fringe_position = unwrapped_phase_rad / (2*pi) = {sample.fringe_position:+.4f}"
+            )
+            self.label_fringes.configure(
+                text=f"signed_fringes = {sample.signed_fringes:+d}"
+            )
+            
+            # Format direction label in English
+            dir_text = "Still"
+            dir_color = ORANGE_COLOR
+            if sample.direction == "forward":
+                dir_text = "Forward →"
+                dir_color = GREEN_COLOR
+            elif sample.direction == "backward":
+                dir_text = "Backward ←"
+                dir_color = RED_COLOR
+            elif sample.direction == "signal_low":
+                dir_text = "Signal Low"
+                dir_color = RED_COLOR
+            elif sample.direction == "reference_low":
+                dir_text = "Reference Low"
+                dir_color = RED_COLOR
+
+            self.label_direction.configure(
+                text=f"Direction: {dir_text}",
+                text_color=dir_color
+            )
+
+            if distance_mm is None:
+                self.label_distance.configure(
+                    text="distance_mm = fringe_position * fringe_distance_mm = n/a"
+                )
+            else:
+                self.label_distance.configure(
+                    text=f"distance_mm = fringe_position * fringe_distance_mm = {distance_mm:+.9f} mm"
+                )
+
+            # Update color highlight on fringe detection
+            if sample.fringe_delta != 0:
+                self.label_fringes.configure(text_color=GREEN_COLOR)
+                self.root.after(
+                    250,
+                    lambda: self.label_fringes.configure(text_color=TEXT_COLOR)
+                )
+
+            # Stage lock correction check
+            self.update_lock_display(sample, distance_mm)
+            self.update_comparison_labels()
+            
+            # Replot the data
+            self.update_plot()
+
+        # Schedule next UI update
+        self.root.after(int(UI_UPDATE_INTERVAL_S * 1000), self.update_ui_loop)
 
     def measurement_loop(self):
         try:
@@ -1789,12 +2409,20 @@ class HomodyneGui:
                 )
             )
 
+            # Start the UI update loop
+            self.root.after(0, self.start_ui_loop)
+
             self.monitor.calibrate(
-                should_continue=lambda: self.monitoring
+                seconds=CALIBRATION_SECONDS,
+                sample_interval_s=SAMPLE_INTERVAL_S,
+                should_continue=lambda: self.monitoring,
+                sample_callback=self.handle_calibration_sample
             )
 
             if not self.monitoring:
                 return
+
+            self.calibrating = False
 
             self.root.after(
                 0,
@@ -1806,10 +2434,30 @@ class HomodyneGui:
             )
 
             while self.monitoring:
-                sample = self.monitor.read()
+                raw_s1, raw_s2, raw_ref = self.monitor.reader.read()
+                
+                # Correct S1 for reference fluctuations
+                if abs(raw_ref) >= self.monitor.counter.min_reference_signal:
+                    ref_corrected_s1 = raw_s1 / raw_ref
+                else:
+                    ref_corrected_s1 = 0.0
+                
+                # Run updates in background thread
+                self.monitor.single_counter.update(ref_corrected_s1)
+                sample = self.monitor.counter.update(raw_s1, raw_s2, raw_ref)
                 distance_mm = self.monitor.counter.signed_distance_mm()
 
-                self.queue_sample_display(sample, distance_mm)
+                # Lock and update histories
+                with self.sample_display_lock:
+                    self.latest_sample = sample
+                    self.latest_distance_mm = distance_mm
+                    self.raw_s1_history.append(raw_s1)
+                    self.raw_s2_history.append(raw_s2)
+                    self.raw_ref_history.append(raw_ref)
+                    if len(self.raw_s1_history) > 300:
+                        self.raw_s1_history.pop(0)
+                        self.raw_s2_history.pop(0)
+                        self.raw_ref_history.pop(0)
 
                 time.sleep(SAMPLE_INTERVAL_S)
 
@@ -1823,107 +2471,30 @@ class HomodyneGui:
 
         finally:
             self.monitoring = False
-            self.monitor.close()
+            self.calibrating = False
+            try:
+                self.monitor.close()
+            except Exception:
+                pass
             self.root.after(0, self.finish_stopped_ui)
 
-    def update_sample_display(self, sample, distance_mm):
-        self.latest_sample = sample
-        self.latest_distance_mm = distance_mm
-
-        self.raw_s1_history.append(sample.raw_s1)
-        self.raw_s2_history.append(sample.raw_s2)
-        self.raw_ref_history.append(sample.raw_ref)
-
-        if len(self.raw_s1_history) > 300:
-            self.raw_s1_history.pop(0)
-            self.raw_s2_history.pop(0)
-            self.raw_ref_history.pop(0)
-
-        self.update_plot()
-
-        self.label_phase.configure(
-            text=f"{sample.unwrapped_phase_rad:+.5f} rad"
-        )
-        self.label_fringe_position.configure(
-            text=f"{sample.fringe_position:+.4f}"
-        )
-        self.label_fringes.configure(
-            text=f"{sample.signed_fringes:+d}"
-        )
-        self.label_direction.configure(
-            text=sample.direction
-        )
-
-        if distance_mm is None:
-            self.label_distance.configure(
-                text="distance_mm = fringe_position * fringe_distance_mm = n/a"
-            )
-        else:
-            self.label_distance.configure(
-                text=(
-                    "distance_mm = fringe_position * fringe_distance_mm = "
-                    f"{distance_mm:+.9f} mm"
-                )
-            )
-
-        self.label_phase.configure(
-            text=(
-                "phase_rad = atan2(S2_norm, S1_norm) = "
-                f"{sample.phase_rad:+.5f} rad"
-            ) if sample.valid else "phase_rad = invalid"
-        )
-
-        if sample.direction == "reference_low":
-            self.label_s1_norm.configure(
-                text="S1_norm = raw_ref too low"
-            )
-            self.label_s2_norm.configure(
-                text="S2_norm = raw_ref too low"
-            )
-        else:
-            self.label_s1_norm.configure(
-                text=(
-                    "S1_norm = (raw_S1 / raw_ref - offset_S1) / scale_S1 = "
-                    f"{sample.s1:+.6f}"
-                )
-            )
-            self.label_s2_norm.configure(
-                text=(
-                    "S2_norm = (raw_S2 / raw_ref - offset_S2) / scale_S2 = "
-                    f"{sample.s2:+.6f}"
-                )
-            )
-
-        self.label_unwrapped_phase.configure(
-            text=(
-                "unwrapped_phase_rad += delta_phase_rad = "
-                f"{sample.unwrapped_phase_rad:+.5f} rad"
-            )
-        )
-        self.label_fringe_position.configure(
-            text=(
-                "fringe_position = unwrapped_phase_rad / (2*pi) = "
-                f"{sample.fringe_position:+.4f}"
-            )
-        )
-        self.label_fringes.configure(
-            text=f"signed_fringes = {sample.signed_fringes:+d}"
-        )
-        self.label_direction.configure(
-            text=f"direction = {sample.direction}"
-        )
-
-        if sample.fringe_delta != 0:
-            self.label_fringes.configure(text_color=GREEN_COLOR)
-            self.root.after(
-                250,
-                lambda:
-                self.label_fringes.configure(text_color=TEXT_COLOR)
-            )
-
-        self.update_lock_display(sample, distance_mm)
+    def handle_calibration_sample(self, raw_sample, elapsed_s, total_s):
+        raw_s1, raw_s2, raw_ref = raw_sample
+        with self.sample_display_lock:
+            self.raw_s1_history.append(raw_s1)
+            self.raw_s2_history.append(raw_s2)
+            self.raw_ref_history.append(raw_ref)
+            if len(self.raw_s1_history) > 300:
+                self.raw_s1_history.pop(0)
+                self.raw_s2_history.pop(0)
+                self.raw_ref_history.pop(0)
+            self.calibration_progress_text = f"Status: calibrating {elapsed_s:.1f}/{total_s:.1f}s..."
 
     def reset_calculation_display(self):
+        self.label_single_fringes.configure(text="S1 Fringe Count: 0")
+        self.label_single_distance.configure(text="S1 Calculated Distance: 0.000000 mm")
+        self.label_single_thresholds.configure(text="S1 Thresholds: Min/Max = n/a, Amplitude = n/a")
+
         self.label_phase.configure(
             text="phase_rad = atan2(S2_norm, S1_norm) = n/a"
         )
@@ -1943,7 +2514,7 @@ class HomodyneGui:
             text="signed_fringes = 0"
         )
         self.label_direction.configure(
-            text="direction = none"
+            text="Direction: Still"
         )
         self.label_distance.configure(
             text="distance_mm = fringe_position * fringe_distance_mm = n/a"
@@ -2248,6 +2819,7 @@ class HomodyneGui:
 
     def reset_monitor(self):
         self.monitor.counter.reset()
+        self.monitor.single_counter.reset()
         self.latest_sample = None
         self.latest_distance_mm = None
         self.raw_s1_history = []
@@ -2278,33 +2850,102 @@ class HomodyneGui:
             )
 
     def update_plot(self, reset=False):
-        if self.plot_axes is None:
+        if self.plot_axes is None or self.axis_circle is None:
             return
 
         if reset:
-            for key in self.plot_lines:
-                self.plot_lines[key].set_data([], [])
-
-            for axis in self.plot_axes.values():
-                axis.relim()
-                axis.autoscale_view()
-
+            self.plot_lines['S1_raw'].set_data([], [])
+            self.plot_lines['S2_raw'].set_data([], [])
+            self.plot_lines['Ref_raw'].set_data([], [])
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
             self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
             return
 
-        x = list(range(len(self.raw_s1_history)))
-        plot_data = {
-            'S1_raw': self.raw_s1_history,
-            'S2_raw': self.raw_s2_history,
-            'Ref_raw': self.raw_ref_history
-        }
+        with self.sample_display_lock:
+            s1_hist = list(self.raw_s1_history)
+            s2_hist = list(self.raw_s2_history)
+            ref_hist = list(self.raw_ref_history)
 
-        for key, values in plot_data.items():
-            self.plot_lines[key].set_data(x, values)
-            self.plot_axes[key].relim()
-            self.plot_axes[key].autoscale_view()
+        self.update_plot_data(s1_hist, s2_hist, ref_hist)
+
+    def update_plot_data(self, s1_hist, s2_hist, ref_hist):
+        if self.plot_axes is None or self.axis_circle is None:
+            return
+
+        x = list(range(len(s1_hist)))
+        
+        # Update raw voltage plots
+        self.plot_lines['S1_raw'].set_data(x, s1_hist)
+        self.plot_axes['S1_raw'].relim()
+        self.plot_axes['S1_raw'].autoscale_view()
+
+        self.plot_lines['S2_raw'].set_data(x, s2_hist)
+        self.plot_axes['S2_raw'].relim()
+        self.plot_axes['S2_raw'].autoscale_view()
+
+        self.plot_lines['Ref_raw'].set_data(x, ref_hist)
+        self.plot_axes['Ref_raw'].relim()
+        self.plot_axes['Ref_raw'].autoscale_view()
+
+        # Update circle plot
+        s1_norm_history = []
+        s2_norm_history = []
+        with self.monitor.counter.lock:
+            offset_s1 = self.monitor.counter.offset_s1
+            scale_s1 = self.monitor.counter.scale_s1
+            offset_s2 = self.monitor.counter.offset_s2
+            scale_s2 = self.monitor.counter.scale_s2
+            min_reference_signal = self.monitor.counter.min_reference_signal
+
+        for r1, r2, ref in zip(s1_hist, s2_hist, ref_hist):
+            if abs(ref) >= min_reference_signal:
+                ref_corrected_s1 = r1 / ref
+                ref_corrected_s2 = r2 / ref
+            else:
+                ref_corrected_s1 = 0.0
+                ref_corrected_s2 = 0.0
+            
+            s1 = (ref_corrected_s1 - offset_s1) / (scale_s1 if scale_s1 > 1e-12 else 1.0)
+            s2 = (ref_corrected_s2 - offset_s2) / (scale_s2 if scale_s2 > 1e-12 else 1.0)
+            s1_norm_history.append(s1)
+            s2_norm_history.append(s2)
+
+        self.plot_lines['circle_trace'].set_data(s1_norm_history, s2_norm_history)
+        
+        if s1_norm_history:
+            curr_x = s1_norm_history[-1]
+            curr_y = s2_norm_history[-1]
+            self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
+            self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
+            
+            # Update tangent quiver arrow
+            if self.latest_sample is not None and self.latest_sample.direction in ["forward", "backward"]:
+                phi = math.atan2(curr_y, curr_x)
+                if self.latest_sample.direction == "forward":
+                    dx, dy = -math.sin(phi), math.cos(phi)
+                    color = 'green'
+                else:
+                    dx, dy = math.sin(phi), -math.cos(phi)
+                    color = 'red'
+                
+                arrow_len = 0.3
+                self.plot_quiver.set_offsets([[curr_x, curr_y]])
+                self.plot_quiver.set_UVC([arrow_len * dx], [arrow_len * dy])
+                self.plot_quiver.set_color(color)
+                self.plot_quiver.set_visible(True)
+            else:
+                self.plot_quiver.set_visible(False)
+        else:
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
 
         self.plot_canvas.draw_idle()
+        self.plot_canvas_circle.draw_idle()
 
     def on_close(self):
         self.monitoring = False
