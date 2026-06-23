@@ -22,54 +22,36 @@ class StageController:
 
     def connect(self):
 
-        try:
-            self.device = GCSDevice()
-            self.device.InterfaceSetupDlg()
-            self.connected = True
-            self.current_position = self.get_position()
-            return True
-        except Exception as e:
-            print("Stage connection error:", e)
-            self.connected = False
-            return False
+        self.device = GCSDevice()
+        self.device.InterfaceSetupDlg()
+        self.connected = True
+        self.current_position = self.get_position()
+        return True
 
     def get_position(self):
 
-        if not self.connected:
-            return self.current_position
-
-        try:
-            pos = self.device.qPOS(STAGE_AXIS)
-            self.current_position = float(pos[STAGE_AXIS])
-            return self.current_position
-        except Exception as e:
-            print("Position error:", e)
-            return self.current_position
+        pos = self.device.qPOS(STAGE_AXIS)
+        self.current_position = float(pos[STAGE_AXIS])
+        return self.current_position
 
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
 
     def move_absolute(self, target_mm):
 
-        if not self.connected or self.is_moving:
-            return False
+        target_mm_clamped = self.clamp_position(target_mm)
+        self.target_position = target_mm_clamped
+        self.is_moving = True
 
         def worker():
-            try:
-                self.is_moving = True
-                target_mm_clamped = self.clamp_position(target_mm)
-                self.target_position = target_mm_clamped
-                self.device.MOV(STAGE_AXIS, target_mm_clamped)
+            self.device.MOV(STAGE_AXIS, target_mm_clamped)
 
-                while self.device.IsMoving()[STAGE_AXIS]:
-                    self.current_position = self.get_position()
-                    time.sleep(0.02)
-
+            while self.device.IsMoving()[STAGE_AXIS]:
                 self.current_position = self.get_position()
-            except Exception as e:
-                print("Move absolute error:", e)
-            finally:
-                self.is_moving = False
+                time.sleep(0.02)
+
+            self.current_position = self.get_position()
+            self.is_moving = False
 
         threading.Thread(target=worker, daemon=True).start()
         return True
@@ -92,10 +74,7 @@ class StageController:
         return self.move_absolute(self.min_position)
 
     def set_step_size(self, step_size):
-        try:
-            self.step_size = float(step_size)
-        except:
-            pass
+        self.step_size = float(step_size)
 
     def set_velocity(self, vel=None):
         if vel is not None:
@@ -103,15 +82,7 @@ class StageController:
         return self.velocity
 
     def stop(self):
-        try:
-            if self.connected:
-                self.device.STP()
-        except Exception as e:
-            print("Stage stop error:", e)
+        self.device.STP()
 
     def close(self):
-        try:
-            if self.device is not None:
-                self.device.CloseConnection()
-        except Exception as e:
-            print("Stage close error:", e)
+        self.device.CloseConnection()

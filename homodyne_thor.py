@@ -742,7 +742,7 @@ class HomodyneGui:
 
         self.wavelength_button = ctk.CTkButton(
             self.stage_frame,
-            text="Set wavelength",
+            text="Set wavelength (nm)",
             width=120,
             command=self.apply_wavelength,
             fg_color=TEXT_COLOR
@@ -759,7 +759,7 @@ class HomodyneGui:
 
         ctk.CTkLabel(
             self.stage_frame,
-            text="Step size:",
+            text="Step size (mm):",
             font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 0))
@@ -777,7 +777,7 @@ class HomodyneGui:
 
         ctk.CTkLabel(
             self.stage_frame,
-            text="Velocity:",
+            text="Velocity (mm):",
             font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 0))
