@@ -606,6 +606,12 @@ class HomodyneGui:
         self.lock_target_position_mm = None
 
         self.build_ui()
+        if not self.stage_connected:
+            error_text = self.stage.last_error or "PI stage not connected"
+            self.label_stage_status.configure(
+                text=f"Stage: not connected ({error_text})",
+                text_color=RED_COLOR
+            )
         self.update_comparison_labels()
         self.update_stage_position_once()
         self.root.after(
@@ -1352,7 +1358,11 @@ class HomodyneGui:
 
     def connect_stage(self):
         if not self.stage_connected:
-            self.stage_connected = self.stage.connect()
+            try:
+                self.stage_connected = self.stage.connect()
+            except Exception as error:
+                self.stage_connected = False
+                self.stage.last_error = str(error)
 
         if self.stage_connected:
             pos = self.stage.get_position()
@@ -1362,6 +1372,18 @@ class HomodyneGui:
                 text="Stage: connected",
                 text_color=GREEN_COLOR
             )
+        else:
+            error_text = self.stage.last_error or "PI stage not connected"
+            if hasattr(self, "label_stage_status"):
+                self.label_stage_status.configure(
+                    text=f"Stage: not connected ({error_text})",
+                    text_color=RED_COLOR
+                )
+            if hasattr(self, "status"):
+                self.status.configure(
+                    text=f"Status: stage not connected ({error_text})",
+                    text_color=RED_COLOR
+                )
 
         return self.stage_connected
 
@@ -1401,12 +1423,13 @@ class HomodyneGui:
             text="STOP MONITORING",
             fg_color=RED_COLOR
         )
+
+        self.set_buttons_enabled(False)
+        self.connect_stage()
         self.status.configure(
             text="Status: connecting NI...",
             text_color=ORANGE_COLOR
         )
-
-        self.set_buttons_enabled(False)
 
         self.measurement_thread = threading.Thread(
             target=self.measurement_loop,
@@ -1420,7 +1443,7 @@ class HomodyneGui:
         self.disable_lock(update_status=False)
         self.stop_stage_correction()
         self.stop_calibration_stage_motion()
-        if self.stage.is_moving:
+        if self.stage_connected and self.stage.is_moving:
             self.stage.stop()
         self.status.configure(
             text="Status: stopping...",
@@ -1438,8 +1461,17 @@ class HomodyneGui:
 
         self.speed_entry.delete(0, "end")
         self.speed_entry.insert(0, f"{speed_mm_s:.6f}")
-        self.connect_stage()
-        self.stage.set_velocity(speed_mm_s)
+        if not self.connect_stage():
+            return False
+
+        if not self.stage.set_velocity(speed_mm_s):
+            if update_status:
+                error_text = self.stage.last_error or "could not set stage speed"
+                self.status.configure(
+                    text=f"Status: {error_text}",
+                    text_color=RED_COLOR
+                )
+            return False
 
         self.label_stage_speed.configure(
             text=f"Movement Speed: {speed_mm_s:.6f} mm/s"
@@ -1452,11 +1484,15 @@ class HomodyneGui:
         return True
 
     def prepare_stage_for_move(self):
-        self.connect_stage()
-        self.apply_stage_speed(update_status=False)
+        if not self.connect_stage():
+            return False
+
+        return self.apply_stage_speed(update_status=False)
 
     def start_stage_move_to(self, target_mm, start_pos=None):
-        self.prepare_stage_for_move()
+        if not self.prepare_stage_for_move():
+            return
+
         if start_pos is None:
             start_pos = self.stage.get_position()
 
@@ -1473,7 +1509,14 @@ class HomodyneGui:
             self.clear_stage_target_position()
             return
 
-        self.stage.move_absolute(target_mm)
+        if not self.stage.move_absolute(target_mm):
+            error_text = self.stage.last_error or "stage move failed"
+            self.status.configure(
+                text=f"Status: {error_text}",
+                text_color=RED_COLOR
+            )
+            return
+
         self.status.configure(
             text=f"Stage moving to {target_mm:.6f} mm",
             text_color=TEXT_COLOR
@@ -1484,7 +1527,9 @@ class HomodyneGui:
         ).start()
 
     def start_stage_move_by(self, move_mm):
-        self.connect_stage()
+        if not self.connect_stage():
+            return
+
         start_pos = self.stage.get_position()
         self.start_stage_move_to(start_pos + move_mm, start_pos=start_pos)
 
@@ -1543,6 +1588,13 @@ class HomodyneGui:
         self.start_stage_move_by(self.parse_entry_float(self.target_entry))
 
     def stop_stage(self):
+        if not self.stage_connected:
+            self.status.configure(
+                text="Stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
         self.stage.stop()
         self.root.after(
             0,
@@ -1569,7 +1621,14 @@ class HomodyneGui:
             )
             self.update_still_to_drive_label(pos)
 
-            if self.stage.is_moving:
+            if self.stage_target_position is not None and not self.calibrating:
+                moved = abs(pos - self.stage_start_position)
+                self.update_stage_labels(
+                    pos,
+                    moved,
+                    self.stage_movement_before_move
+                )
+            elif self.stage.is_moving:
                 self.update_stage_speed_label(pos)
             else:
                 self.label_stage_speed.configure(
@@ -1696,59 +1755,117 @@ class HomodyneGui:
         )
 
     def calibration_stage_motion(self):
+        if not self.stage_connected:
+            return
+
         start_pos = self.stage.get_position()
         forward_target = self.stage.clamp_position(
             start_pos + CALIBRATION_STAGE_DISTANCE_MM
         )
-        zero_target = self.stage.clamp_position(0.0)
+        back_target = self.stage.clamp_position(start_pos)
 
+        previous_velocity = self.stage.set_velocity()
         self.stage.set_velocity(CALIBRATION_STAGE_SPEED_MM_S)
         self.stage_start_position = start_pos
         self.stage_movement_before_move = 0.0
         self.reset_stage_speed_tracking(start_pos)
+        move_timeout_s = (CALIBRATION_STAGE_MOTION_SECONDS / 2) + 2.0
 
         self.root.after(
             0,
             lambda:
             self.status.configure(
-                text=f"Calibration sweep: {CALIBRATION_STAGE_DISTANCE_MM:.5f} mm",
+                text=(
+                    f"Calibration sweep: "
+                    f"+/-{CALIBRATION_STAGE_DISTANCE_MM:.5f} mm"
+                ),
                 text_color=ORANGE_COLOR
             )
         )
 
-        for target in (forward_target, zero_target):
-            if not self.monitoring:
-                break
+        accumulated_movement_mm = 0.0
 
-            self.set_stage_target_position(target, self.stage.get_position())
-            self.stage.move_absolute(target)
+        try:
+            for target in (forward_target, back_target):
+                if not self.monitoring or not self.calibrating:
+                    break
 
-            while self.stage.is_moving and self.monitoring:
+                leg_start_pos = self.stage.get_position()
+                self.set_stage_target_position(target, leg_start_pos)
+
+                def update_calibration_progress(pos, start=leg_start_pos, base=accumulated_movement_mm):
+                    moved = base + abs(pos - start)
+                    self.root.after(
+                        0,
+                        lambda p=pos, m=moved:
+                        self.update_stage_labels(p, m, 0.0)
+                    )
+
+                ok = self.stage.move_absolute_blocking(
+                    target,
+                    timeout_s=move_timeout_s,
+                    should_continue=lambda: self.monitoring and self.calibrating,
+                    progress_callback=update_calibration_progress
+                )
+
                 pos = self.stage.get_position()
-                moved = abs(pos - start_pos)
+                accumulated_movement_mm += abs(pos - leg_start_pos)
+                self.total_stage_movement = accumulated_movement_mm
+                self.current_stage_movement_for_compare = accumulated_movement_mm
                 self.root.after(
                     0,
-                    lambda p=pos, m=moved:
+                    lambda p=pos, m=accumulated_movement_mm:
                     self.update_stage_labels(p, m, 0.0)
                 )
-                time.sleep(0.02)
+
+                if not ok:
+                    error_text = self.stage.last_error or "calibration stage move stopped"
+                    self.root.after(
+                        0,
+                        lambda e=error_text:
+                        self.status.configure(
+                            text=f"Status: {e}",
+                            text_color=RED_COLOR
+                        )
+                    )
+                    break
+
+        finally:
+            self.stage.stop()
+            if previous_velocity is not None:
+                self.stage.set_velocity(previous_velocity)
 
         pos = self.stage.get_position()
         self.root.after(
             0,
-            lambda p=pos:
-            self.finish_calibration_movement(p)
+            lambda p=pos, m=accumulated_movement_mm:
+            self.finish_calibration_movement(p, m)
         )
 
     def stop_calibration_stage_motion(self):
-        if self.stage.is_moving:
+        if self.stage_connected:
             self.stage.stop()
         self.clear_stage_target_position()
 
-    def finish_calibration_movement(self, pos=None):
+    def finish_calibration_movement(self, pos=None, accumulated_movement_mm=None):
         if pos is None:
             pos = self.stage.get_position()
-        self.reset_stage_movement_tracking(pos)
+
+        if accumulated_movement_mm is None:
+            self.reset_stage_movement_tracking(pos)
+        else:
+            self.stage_reference_position = pos
+            self.total_stage_movement = accumulated_movement_mm
+            self.current_stage_movement_for_compare = accumulated_movement_mm
+            self.set_stage_position_label_text(
+                f"Stage Position: {pos:.6f} mm"
+            )
+            self.label_stage_moved.configure(
+                text=f"Accumulated Movement: {accumulated_movement_mm:.6f} mm"
+            )
+            self.clear_stage_target_position()
+            self.update_comparison_labels(accumulated_movement_mm)
+
         self.set_buttons_enabled(True)
         if self.monitoring:
             self.status.configure(
@@ -1888,11 +2005,20 @@ class HomodyneGui:
             )
         )
 
-        if self.connect_stage():
+        if self.stage_connected:
             threading.Thread(
                 target=self.calibration_stage_motion,
                 daemon=True
             ).start()
+        else:
+            self.root.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Status: calibrating NI only, stage not connected",
+                    text_color=ORANGE_COLOR
+                )
+            )
 
         self.root.after(0, self.start_ui_loop)
 
@@ -1995,6 +2121,13 @@ class HomodyneGui:
             self.status.configure(
                 text="Status: wait for stage movement before lock",
                 text_color=ORANGE_COLOR
+            )
+            return
+
+        if not self.stage_connected:
+            self.status.configure(
+                text="Status: stage not connected, cannot lock",
+                text_color=RED_COLOR
             )
             return
 
@@ -2110,6 +2243,13 @@ class HomodyneGui:
         if not self.lock_active:
             return
 
+        if not self.stage_connected:
+            self.label_stage_status.configure(
+                text="Stage: not connected, cannot correct lock",
+                text_color=RED_COLOR
+            )
+            return
+
         if (
             self.lock_correction_active
             or self.stage_command_active
@@ -2215,7 +2355,7 @@ class HomodyneGui:
         was_correcting = self.lock_correction_active
         self.lock_correction_active = False
 
-        if was_correcting:
+        if was_correcting and self.stage_connected:
             self.stage.stop()
 
     def finish_stopped_ui(self):
