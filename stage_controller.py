@@ -25,7 +25,7 @@ class StageController:
         self.current_position = 0.0
         self.target_position = 0.0
         self.step_size = 0.020000000
-        self.velocity = 0.1
+        self.velocity = 0.0006
         self.is_moving = False
         self.min_position = -12.5
         self.max_position = 12.5

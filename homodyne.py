@@ -28,11 +28,9 @@ MAX_VISIBLE_FRINGE_AMPLITUDE_V = 0.010
 CALIBRATION_SECONDS = 20.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
 CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
-CALIBRATION_STAGE_SPEED_MM_S = (
-    2 * CALIBRATION_STAGE_DISTANCE_MM
-) / CALIBRATION_STAGE_MOTION_SECONDS
+CALIBRATION_STAGE_SPEED_MM_S = 0.0006
 
-DEFAULT_STAGE_SPEED_MM_S = 0.000600
+DEFAULT_STAGE_SPEED_MM_S = 0.0006
 RAW_HISTORY_LENGTH = 300
 STAGE_STATUS_POLL_MS = 100
 
@@ -1786,48 +1784,51 @@ class HomodyneGui:
         accumulated_movement_mm = 0.0
 
         try:
-            for target in (forward_target, back_target):
-                if not self.monitoring or not self.calibrating:
-                    break
+            while self.monitoring and self.calibrating:
+                for target in (forward_target, back_target):
+                    if not self.monitoring or not self.calibrating:
+                        break
 
-                leg_start_pos = self.stage.get_position()
-                self.set_stage_target_position(target, leg_start_pos)
+                    leg_start_pos = self.stage.get_position()
+                    self.set_stage_target_position(target, leg_start_pos)
 
-                def update_calibration_progress(pos, start=leg_start_pos, base=accumulated_movement_mm):
-                    moved = base + abs(pos - start)
+                    def update_calibration_progress(pos, start=leg_start_pos, base=accumulated_movement_mm):
+                        moved = base + abs(pos - start)
+                        self.root.after(
+                            0,
+                            lambda p=pos, m=moved:
+                            self.update_stage_labels(p, m, 0.0)
+                        )
+
+                    ok = self.stage.move_absolute_blocking(
+                        target,
+                        timeout_s=move_timeout_s,
+                        should_continue=lambda: self.monitoring and self.calibrating,
+                        progress_callback=update_calibration_progress
+                    )
+
+                    pos = self.stage.get_position()
+                    accumulated_movement_mm += abs(pos - leg_start_pos)
+                    self.total_stage_movement = accumulated_movement_mm
+                    self.current_stage_movement_for_compare = accumulated_movement_mm
                     self.root.after(
                         0,
-                        lambda p=pos, m=moved:
+                        lambda p=pos, m=accumulated_movement_mm:
                         self.update_stage_labels(p, m, 0.0)
                     )
 
-                ok = self.stage.move_absolute_blocking(
-                    target,
-                    timeout_s=move_timeout_s,
-                    should_continue=lambda: self.monitoring and self.calibrating,
-                    progress_callback=update_calibration_progress
-                )
-
-                pos = self.stage.get_position()
-                accumulated_movement_mm += abs(pos - leg_start_pos)
-                self.total_stage_movement = accumulated_movement_mm
-                self.current_stage_movement_for_compare = accumulated_movement_mm
-                self.root.after(
-                    0,
-                    lambda p=pos, m=accumulated_movement_mm:
-                    self.update_stage_labels(p, m, 0.0)
-                )
-
-                if not ok:
-                    error_text = self.stage.last_error or "calibration stage move stopped"
-                    self.root.after(
-                        0,
-                        lambda e=error_text:
-                        self.status.configure(
-                            text=f"Status: {e}",
-                            text_color=RED_COLOR
+                    if not ok:
+                        error_text = self.stage.last_error or "calibration stage move stopped"
+                        self.root.after(
+                            0,
+                            lambda e=error_text:
+                            self.status.configure(
+                                text=f"Status: {e}",
+                                text_color=RED_COLOR
+                            )
                         )
-                    )
+                        break
+                if not ok:
                     break
 
         finally:

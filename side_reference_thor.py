@@ -33,15 +33,13 @@ SPEED_OF_LIGHT_MM_PS = 0.299792458
 CALIBRATION_SECONDS = 20.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
 CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
-CALIBRATION_STAGE_SPEED_MM_S = (
-    2 * CALIBRATION_STAGE_DISTANCE_MM
-) / CALIBRATION_STAGE_MOTION_SECONDS
+CALIBRATION_STAGE_SPEED_MM_S = 0.0006
 DEFAULT_FRINGE_AMPLITUDE_V = 0.001
 MIN_VALID_FRINGE_AMPLITUDE_V = 0.001
 MAX_VALID_FRINGE_AMPLITUDE_V = 0.010
 FRINGE_RISE_FRACTION = 0.55
 FRINGE_REARM_FRACTION = 0.20
-DEFAULT_STAGE_SPEED_MM_S = 0.000600
+DEFAULT_STAGE_SPEED_MM_S = 0.0006
 RAW_HISTORY_LENGTH = 300
 SMOOTHING_WINDOW_LENGTH = 1
 STEP_PAUSE_S = 0.05
@@ -2481,16 +2479,17 @@ class SideApp(ctk.CTk):
     def calibration_stage_motion(self):
 
         previous_velocity = None
+        accumulated_movement_mm = 0.0
 
         try:
             if not self.stage_connected:
                 return
 
             start_pos = self.stage.get_position()
-            zero_target = self.stage.clamp_position(0.0)
             forward_target = self.stage.clamp_position(
                 start_pos + CALIBRATION_STAGE_DISTANCE_MM
             )
+            back_target = self.stage.clamp_position(start_pos)
             sweep_distance_mm = abs(
                 forward_target - start_pos
             )
@@ -2500,19 +2499,6 @@ class SideApp(ctk.CTk):
 
             previous_velocity = self.stage.set_velocity()
             calibration_speed_mm_s = CALIBRATION_STAGE_SPEED_MM_S
-            calibration_path_mm = (
-                abs(forward_target - start_pos)
-                + abs(forward_target - zero_target)
-            )
-
-            if (
-                abs(calibration_path_mm - 2 * CALIBRATION_STAGE_DISTANCE_MM)
-                > 1e-12
-            ):
-                calibration_speed_mm_s = (
-                    calibration_path_mm
-                    / CALIBRATION_STAGE_MOTION_SECONDS
-                )
 
             if not self.stage.set_velocity(calibration_speed_mm_s):
                 return
@@ -2526,7 +2512,7 @@ class SideApp(ctk.CTk):
                 lambda:
                 self.status.configure(
                     text=(
-                        f"Calibration sweep then return to 0: "
+                        f"Calibration sweep: "
                         f"{sweep_distance_mm:.5f} mm "
                         f"at {calibration_speed_mm_s:.6f} mm/s"
                     ),
@@ -2534,46 +2520,50 @@ class SideApp(ctk.CTk):
                 )
             )
 
-            for target in (forward_target, zero_target):
-                if not self.is_monitoring or not self.calibrating:
-                    return
+            while self.is_monitoring and self.calibrating:
+                for target in (forward_target, back_target):
+                    if not self.is_monitoring or not self.calibrating:
+                        return
 
-                self.stage_target_position = target
-                self.stage_remaining_known = True
+                    leg_start_pos = self.stage.get_position()
+                    self.stage_target_position = target
+                    self.stage_remaining_known = True
 
-                if not self.stage.move_absolute(target):
-                    return
+                    if not self.stage.move_absolute(target):
+                        return
 
-                while (
-                    self.stage.is_moving
-                    and self.is_monitoring
-                    and self.calibrating
-                ):
+                    while (
+                        self.stage.is_moving
+                        and self.is_monitoring
+                        and self.calibrating
+                    ):
+                        current_pos = self.stage.get_position()
+                        moved = accumulated_movement_mm + abs(
+                            current_pos - leg_start_pos
+                        )
+                        self.after(
+                            0,
+                            lambda p=current_pos, m=moved:
+                            self.update_stage_labels(p, m, 0.0)
+                        )
+                        time.sleep(0.01)
+
+                    if not self.is_monitoring or not self.calibrating:
+                        return
+
                     current_pos = self.stage.get_position()
-                    moved = abs(
-                        current_pos - start_pos
-                    )
+                    accumulated_movement_mm += abs(current_pos - leg_start_pos)
+                    self.total_stage_movement = accumulated_movement_mm
+                    self.current_stage_movement_for_compare = accumulated_movement_mm
                     self.after(
                         0,
-                        lambda p=current_pos, m=moved:
+                        lambda p=current_pos, m=accumulated_movement_mm:
                         self.update_stage_labels(p, m, 0.0)
                     )
-                    time.sleep(0.01)
-
-                if not self.is_monitoring or not self.calibrating:
-                    return
-
-                current_pos = self.stage.get_position()
-                self.after(
-                    0,
-                    lambda p=current_pos:
-                    self.update_still_to_drive_label(p)
-                )
 
         finally:
             if (
-                previous_velocity is not None
-                and self.stage_connected
+                self.stage_connected
                 and self.stage.is_moving
             ):
                 self.stage.stop()
@@ -2581,7 +2571,12 @@ class SideApp(ctk.CTk):
             if previous_velocity is not None and self.stage_connected:
                 self.stage.set_velocity(previous_velocity)
 
-            self.after(0, self.finish_calibration_movement)
+            pos = self.stage.get_position()
+            self.after(
+                0,
+                lambda p=pos, m=accumulated_movement_mm:
+                self.finish_calibration_movement(p, m)
+            )
 
     def stop_calibration_stage_motion(self):
 
@@ -2602,7 +2597,7 @@ class SideApp(ctk.CTk):
             )
         )
 
-    def finish_calibration_movement(self):
+    def finish_calibration_movement(self, pos=None, accumulated_movement_mm=None):
 
         if self.stage_connected and self.stage.is_moving:
             self.stage.stop()
@@ -2612,15 +2607,31 @@ class SideApp(ctk.CTk):
             )
             self.after(
                 STAGE_STATUS_POLL_MS,
-                self.finish_calibration_movement
+                lambda p=pos, m=accumulated_movement_mm: self.finish_calibration_movement(p, m)
             )
             return
 
-        if self.stage_connected:
-            current_pos = self.stage.get_position()
-            self.reset_stage_movement_tracking(current_pos)
+        if pos is None:
+            if self.stage_connected:
+                pos = self.stage.get_position()
+            else:
+                pos = 0.0
+
+        if accumulated_movement_mm is None:
+            self.reset_stage_movement_tracking(pos)
         else:
-            self.reset_stage_movement_tracking(150.0)
+            self.stage_reference_position = pos
+            self.total_stage_movement = accumulated_movement_mm
+            self.current_stage_movement_for_compare = accumulated_movement_mm
+            
+            self.label_stage_position.configure(
+                text=f"Stage Position: {pos:.6f} mm"
+            )
+            self.label_stage_moved.configure(
+                text=f"Accumulated Movement: {accumulated_movement_mm:.6f} mm"
+            )
+            self.clear_stage_target_position()
+            self.update_comparison_labels(accumulated_movement_mm)
 
         if self.calibrating:
             self.status.configure(

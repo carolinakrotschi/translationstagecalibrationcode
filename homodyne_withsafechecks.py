@@ -2327,8 +2327,8 @@ class HomodyneGui:
                 return
 
             start_pos = self.stage.get_position()
-            zero_target = self.stage.clamp_position(0.0)
             forward_target = self.stage.clamp_position(start_pos + CALIBRATION_STAGE_DISTANCE_MM)
+            back_target = self.stage.clamp_position(start_pos)
             sweep_distance_mm = abs(forward_target - start_pos)
 
             if sweep_distance_mm <= 1e-12:
@@ -2340,10 +2340,6 @@ class HomodyneGui:
 
             previous_velocity = self.stage.set_velocity()
             calibration_speed_mm_s = CALIBRATION_STAGE_SPEED_MM_S
-            calibration_path_mm = abs(forward_target - start_pos) + abs(forward_target - zero_target)
-
-            if abs(calibration_path_mm - 2 * CALIBRATION_STAGE_DISTANCE_MM) > 1e-12:
-                calibration_speed_mm_s = calibration_path_mm / CALIBRATION_STAGE_MOTION_SECONDS
 
             if not self.stage.set_velocity(calibration_speed_mm_s):
                 self.set_status_from_thread(
@@ -2371,46 +2367,53 @@ class HomodyneGui:
                 )
             )
 
-            for target in (forward_target, zero_target):
-                if not self.monitoring:
-                    return
+            accumulated_movement_mm = 0.0
 
-                self.set_stage_target_position(target, self.stage.get_position())
-                self.root.after(
-                    0,
-                    lambda t=target:
-                    self.set_stage_position_label_text(
-                        f"Stage target: {t:.6f} mm"
-                    )
-                )
+            while self.monitoring and self.calibrating:
+                for target in (forward_target, back_target):
+                    if not self.monitoring or not self.calibrating:
+                        return
 
-                if not self.stage.move_absolute(target):
-                    self.set_status_from_thread(
-                        f"Status: calibration stage move to {target:.6f} mm failed",
-                        RED_COLOR
-                    )
-                    return
-
-                while self.stage.is_moving and self.monitoring:
-                    current_pos = self.stage.get_position()
-                    moved = abs(current_pos - start_pos)
+                    leg_start_pos = self.stage.get_position()
+                    self.set_stage_target_position(target, leg_start_pos)
                     self.root.after(
                         0,
-                        lambda p=current_pos, m=moved:
+                        lambda t=target:
+                        self.set_stage_position_label_text(
+                            f"Stage target: {t:.6f} mm"
+                        )
+                    )
+
+                    if not self.stage.move_absolute(target):
+                        self.set_status_from_thread(
+                            f"Status: calibration stage move to {target:.6f} mm failed",
+                            RED_COLOR
+                        )
+                        return
+
+                    while self.stage.is_moving and self.monitoring and self.calibrating:
+                        current_pos = self.stage.get_position()
+                        moved = accumulated_movement_mm + abs(current_pos - leg_start_pos)
+                        self.root.after(
+                            0,
+                            lambda p=current_pos, m=moved:
+                            self.update_stage_labels(p, m, 0.0)
+                        )
+                        time.sleep(0.01)
+
+                    if not self.monitoring or not self.calibrating:
+                        return
+
+                    current_pos = self.stage.get_position()
+                    accumulated_movement_mm += abs(current_pos - leg_start_pos)
+                    self.total_stage_movement = accumulated_movement_mm
+                    self.current_stage_movement_for_compare = accumulated_movement_mm
+                    
+                    self.root.after(
+                        0,
+                        lambda p=current_pos, m=accumulated_movement_mm:
                         self.update_stage_labels(p, m, 0.0)
                     )
-                    time.sleep(0.01)
-
-                if not self.monitoring:
-                    return
-
-                current_pos = self.stage.get_position()
-                moved = abs(current_pos - start_pos)
-                self.root.after(
-                    0,
-                    lambda p=current_pos, m=moved:
-                    self.update_stage_labels(p, m, 0.0)
-                )
 
         finally:
             if previous_velocity is not None and self.stage_connected and self.stage is not None and self.stage.is_moving:
@@ -2419,7 +2422,12 @@ class HomodyneGui:
             if previous_velocity is not None and self.stage_connected and self.stage is not None:
                 self.stage.set_velocity(previous_velocity)
 
-            self.root.after(0, self.finish_calibration_movement)
+            pos = self.stage.get_position()
+            self.root.after(
+                0,
+                lambda p=pos, m=accumulated_movement_mm:
+                self.finish_calibration_movement(p, m)
+            )
 
     def stop_calibration_stage_motion(self):
         if not self.stage_connected or self.stage is None:
@@ -2436,7 +2444,7 @@ class HomodyneGui:
             )
         )
 
-    def finish_calibration_movement(self):
+    def finish_calibration_movement(self, pos=None, accumulated_movement_mm=None):
         if self.stage_connected and self.stage is not None and self.stage.is_moving:
             self.stage.stop()
             self.status.configure(
@@ -2445,15 +2453,32 @@ class HomodyneGui:
             )
             self.root.after(
                 STAGE_STATUS_POLL_MS,
-                self.finish_calibration_movement
+                lambda p=pos, m=accumulated_movement_mm: self.finish_calibration_movement(p, m)
             )
             return
 
-        if self.stage_connected and self.stage is not None:
-            current_pos = self.stage.get_position()
-            self.reset_stage_movement_tracking(current_pos)
+        if pos is None:
+            if self.stage_connected and self.stage is not None:
+                pos = self.stage.get_position()
+            else:
+                pos = 0.0
+
+        if accumulated_movement_mm is None:
+            self.reset_stage_movement_tracking(pos)
         else:
-            self.reset_stage_movement_tracking(0.0)
+            self.stage_reference_position = pos
+            self.total_stage_movement = accumulated_movement_mm
+            self.current_stage_movement_for_compare = accumulated_movement_mm
+            
+            self.set_stage_position_label_text(
+                f"Stage Position: {pos:.6f} mm"
+            )
+            
+            self.label_stage_moved.configure(
+                text=f"Accumulated Movement: {accumulated_movement_mm:.6f} mm"
+            )
+            self.clear_stage_target_position()
+            self.update_comparison_labels(accumulated_movement_mm)
 
         self.set_buttons_enabled(True)
         if self.monitoring:
