@@ -3,10 +3,6 @@ import threading
 import clr
 from System import Decimal
 
-# =============================================================================
-# KINESIS DLLs
-# =============================================================================
-
 clr.AddReference(r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.DeviceManagerCLI.dll")
 clr.AddReference(r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.GenericMotorCLI.dll")
 clr.AddReference(r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.IntegratedStepperMotorsCLI.dll")
@@ -14,14 +10,8 @@ clr.AddReference(r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.Inte
 from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI
 from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
 
-
 REQUESTED_ACCELERATION = 0.0
 FALLBACK_MOVING_ACCELERATION = 1.0
-
-
-# =============================================================================
-# STAGE CONTROLLER
-# =============================================================================
 
 class StageController:
 
@@ -45,10 +35,6 @@ class StageController:
         self.min_position = 0.0
         self.max_position = 300.0
         self.home_on_connect = True
-
-    # =============================================================================
-    # CONNECT
-    # =============================================================================
 
     def connect(self):
 
@@ -80,10 +66,6 @@ class StageController:
             if not self.device.IsSettingsInitialized():
                 self.device.WaitForSettingsInitialized(10000)
 
-            # =========================================================
-            # 🔥 CRITICAL FIX: Motor configuration laden
-            # =========================================================
-
             print("Load motor configuration...")
             self.device.LoadMotorConfiguration(self.serial_no)
 
@@ -109,10 +91,6 @@ class StageController:
             self.connected = False
             return False
 
-    # =============================================================================
-    # SAFE READY CHECK
-    # =============================================================================
-
     def _wait_until_ready(self):
 
         time.sleep(2)
@@ -135,10 +113,6 @@ class StageController:
             print(self.last_error)
             return False
 
-    # =============================================================================
-    # POSITION
-    # =============================================================================
-
     def get_position(self):
 
         if not self.connected:
@@ -156,16 +130,8 @@ class StageController:
 
         return self.current_position
 
-    # =============================================================================
-    # LIMITS
-    # =============================================================================
-
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
-
-    # =============================================================================
-    # MOVE ABSOLUTE
-    # =============================================================================
 
     def move_absolute(self, target_mm):
 
@@ -197,16 +163,8 @@ class StageController:
         threading.Thread(target=worker, daemon=True).start()
         return True
 
-    # =============================================================================
-    # MOVE RELATIVE
-    # =============================================================================
-
     def move_relative(self, delta):
         return self.move_absolute(self.get_position() + delta)
-
-    # =============================================================================
-    # VELOCITY
-    # =============================================================================
 
     def set_velocity(self, vel=None):
 
@@ -225,9 +183,6 @@ class StageController:
             params = self.device.GetVelocityParams()
             params.MaxVelocity = Decimal(abs(float(vel)))
 
-            # Kinesis move profiles need a positive acceleration to move.
-            # A requested value of 0 means "do not force a new ramp"; keep the
-            # current controller value if it is valid.
             try:
                 current_acceleration = float(
                     str(params.Acceleration).replace(",", ".")
@@ -250,10 +205,6 @@ class StageController:
             print(self.last_error)
             return False
 
-    # =============================================================================
-    # STOP
-    # =============================================================================
-
     def stop(self):
 
         stopped = False
@@ -272,10 +223,6 @@ class StageController:
             self.current_position = self.get_position()
             self.target_position = self.current_position
 
-    # =============================================================================
-    # CLOSE
-    # =============================================================================
-
     def close(self):
 
         try:
@@ -287,11 +234,6 @@ class StageController:
         except Exception as e:
             self.last_error = f"Close error: {e}"
             print(self.last_error)
-
-
-# =============================================================================
-# EXAMPLE
-# =============================================================================
 
 if __name__ == "__main__":
 

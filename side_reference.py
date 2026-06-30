@@ -1,7 +1,44 @@
-import threading
-import time
+# TABLE OF CONTENTS
+# 1. Basic settings
+# 2. Imports
+# 3. Physical constants and colors
+# 4. SideApp class (UI)
+# 5. Monitoring and reset
+# 6. Translation stage control
+# 7. Calibration
+# 8. Diode loop and plotting
+# 9. Cleanup and program start
 
-import customtkinter as ctk
+
+# -----------------------------------------------------------------------------
+# 1. BASIC SETTINGS
+# -----------------------------------------------------------------------------
+
+RAW_HISTORY_LENGTH = 300
+STEP_PAUSE_S = 0.05
+#the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
+REQUIRED_DARK_FRAMES = 3
+REQUIRED_BRIGHT_FRAMES = 3
+#after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
+FRINGE_COOLDOWN = 0.08
+
+MODE = "continuous"
+
+VELOCITY_MM_S = 0.0006
+TOTAL_DISTANCE_MM = 13.0
+
+VELOCITY_MM_S_STEPPED = 1.00
+STEP_SIZE_MM = 0.00001
+STEPS = 100
+
+# -----------------------------------------------------------------------------
+# 2. IMPORTS
+# -----------------------------------------------------------------------------
+
+import threading # so that camera and stage can run without freezing the UI
+import time # for timestamps
+
+import customtkinter as ctk # pythons standard UI library
 
 try:
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -23,45 +60,39 @@ from diode_handler import (
 )
 from stage_controller import StageController
 
+# -----------------------------------------------------------------------------
+# 3. PHYSICAL CONSTANTS
+# -----------------------------------------------------------------------------
+
+SPEED_OF_LIGHT_MM_PS = 0.299792458
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
+def compute_quarter_wavelength_step_mm(wavelength_nm):
+
+    return (wavelength_nm / 4) / 1_000_000
+
+# -----------------------------------------------------------------------------
+# 3.1 COLORS AND FILTER TIMINGS
+# -----------------------------------------------------------------------------
 
 TEXT_COLOR = "#0A4A51"
 GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
 
-SPEED_OF_LIGHT_MM_PS = 0.299792458
-DEFAULT_STAGE_SPEED_MM_S = 0.000600
-RAW_HISTORY_LENGTH = 300
-STEP_PAUSE_S = 0.05
-REQUIRED_DARK_FRAMES = 3
-REQUIRED_BRIGHT_FRAMES = 3
-FRINGE_COOLDOWN = 0.08
-
-# =============================================================================
-# STAGE AUTOMATIC MOTION PARAMETERS (similar to movestage.py)
-# =============================================================================
-# Mode: 'continuous' or 'stepped'
-MODE = "continuous"
-
-# For continuous mode:
-VELOCITY_MM_S = 0.0006  # Velocity in mm/s
-TOTAL_DISTANCE_MM = 13.0  # Total distance to move in mm
-
-# For stepped mode:
-VELOCITY_MM_S_STEPPED = 1.00  # Velocity in mm/s
-STEP_SIZE_MM = 0.00001  # Step size in mm
-STEPS = 100  # Number of steps
-
-
-def compute_quarter_wavelength_step_mm(wavelength_nm):
-
-    return (wavelength_nm / 4) / 1_000_000
-
+# -----------------------------------------------------------------------------
+# 4. APP CLASS (UI)
+# -----------------------------------------------------------------------------
 
 class SideApp(ctk.CTk):
 
+    # -----------------------------------------------------------------------------
+    # 4.1 INITIALIZATION
+    # -----------------------------------------------------------------------------
+
+    #ctk.CTk is the base class for the customtkinter window, here we inherit our InterferometerApp class from it
     def __init__(self):
 
+        #init method always gets called to create a new instance of the class
         super().__init__()
 
         self.title("Single Photodiode Fringe Monitor")
@@ -70,10 +101,12 @@ class SideApp(ctk.CTk):
         ctk.set_appearance_mode("light")
         self.configure(fg_color="white")
 
+        #creates a scrollable frame inside the window
         self.scroll = ctk.CTkScrollableFrame(
             self,
             fg_color="white"
         )
+        #the scrollable frame is put into the window
         self.scroll.pack(
             fill="both",
             expand=True,
@@ -81,8 +114,11 @@ class SideApp(ctk.CTk):
             pady=2
         )
 
+        #some initialization of values
+        #measurement loop is not running at the beginning
         self.is_monitoring = False
         self.measurement_thread = None
+        #for the 5s calibration at the beginning
         self.calibrating = False
         self.latest_sample = None
         self.latest_voltage = 0.0
@@ -91,7 +127,9 @@ class SideApp(ctk.CTk):
         self.raw_voltage_history = []
         self.smoothed_voltage_history = []
         self.accumulated_fringes = 0
+        #a bright state only counts after darkness
         self.was_dark = False
+        #number of consecutive dark/bright fringes
         self.dark_counter = 0
         self.bright_counter = 0
         self.last_count_time = 0.0
@@ -118,9 +156,11 @@ class SideApp(ctk.CTk):
         else:
             self.diode = SingleDiodeHandler()
 
+        #same for the stage
         self.stage = StageController()
         self.stage_connected = self.stage.connect()
 
+        #stores values for all the start positions
         self.stage_start_position = 0.0
         self.stage_reference_position = 0.0
         self.total_stage_movement = 0.0
@@ -130,8 +170,8 @@ class SideApp(ctk.CTk):
         self.last_stage_speed_position = None
 
         self.build_ui()
-        self.update_comparison_labels()
-        self.update_stage_position_once()
+        self.update_comparison_labels() # renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
+        self.update_stage_position_once() # reads the current stage position and updates the label, this is important to have the correct position at the beginning
 
         self.all_buttons = [
             self.restart_btn,
@@ -147,9 +187,9 @@ class SideApp(ctk.CTk):
             self.btn_max
         ]
 
-    # -------------------------------------------------------------------------
-    # UI
-    # -------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # 4.1.2 UI BUILD
+    # -----------------------------------------------------------------------------
 
     def build_ui(self):
 
@@ -646,6 +686,10 @@ class SideApp(ctk.CTk):
 
         self.build_plot()
 
+    # -----------------------------------------------------------------------------
+    # 4.1.3 PLOT BUILD
+    # -----------------------------------------------------------------------------
+
     def build_plot(self):
 
         if Figure is None or FigureCanvasTkAgg is None:
@@ -702,6 +746,10 @@ class SideApp(ctk.CTk):
             pady=8
         )
 
+    # -----------------------------------------------------------------------------
+    # 4.2 ENABLE OR DISABLE ALL BUTTONS
+    # -----------------------------------------------------------------------------
+
     def set_buttons_enabled(self, enabled):
 
         state = "normal" if enabled else "disabled"
@@ -709,16 +757,20 @@ class SideApp(ctk.CTk):
         for button in self.all_buttons:
             button.configure(state=state)
 
-    # -------------------------------------------------------------------------
-    # Monitoring
-    # -------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # 5.1 START OR STOP MONITORING
+    # -----------------------------------------------------------------------------
 
-    def toggle(self):
+    def toggle(self): # toggle method
 
         if self.is_monitoring:
             self.stop_monitoring()
         else:
             self.start_monitoring()
+
+    # -----------------------------------------------------------------------------
+    # 5.1.1 START MONITORING HELPER
+    # -----------------------------------------------------------------------------
 
     def start_monitoring(self):
 
@@ -755,6 +807,10 @@ class SideApp(ctk.CTk):
         )
         self.measurement_thread.start()
 
+    # -----------------------------------------------------------------------------
+    # 5.1.2 STOP MONITORING HELPER
+    # -----------------------------------------------------------------------------
+
     def stop_monitoring(self):
 
         self.is_monitoring = False
@@ -767,6 +823,10 @@ class SideApp(ctk.CTk):
             text="Status: stopping...",
             text_color=ORANGE_COLOR
         )
+
+    # -----------------------------------------------------------------------------
+    # 8.1 DIODE LOOP AND MEASUREMENT
+    # -----------------------------------------------------------------------------
 
     def loop(self):
 
@@ -782,7 +842,6 @@ class SideApp(ctk.CTk):
                 )
             )
 
-            # Start stage calibration motion if connected
             if self.stage_connected:
                 threading.Thread(
                     target=self.calibration_stage_motion,
@@ -853,6 +912,10 @@ class SideApp(ctk.CTk):
                 self.finish_stopped_ui
             )
 
+    # -----------------------------------------------------------------------------
+    # 7.8 HANDLE CALIBRATION SAMPLE
+    # -----------------------------------------------------------------------------
+
     def handle_calibration_sample(self, sample_data, elapsed_s, total_s):
 
         if USE_REFERENCE_DIODE:
@@ -913,6 +976,10 @@ class SideApp(ctk.CTk):
         self.label_calibration.configure(
             text=f"Calibration: {elapsed_s:.1f}/{total_s:.1f}s"
         )
+
+    # -----------------------------------------------------------------------------
+    # 7.8.2 FINISH CALIBRATION DISPLAY
+    # -----------------------------------------------------------------------------
 
     def finish_calibration_display(self, calibration):
 
@@ -989,7 +1056,7 @@ class SideApp(ctk.CTk):
     def update_ui_display(self, sample, fringe_counted):
 
         self.latest_sample = sample
-        
+
         if USE_REFERENCE_DIODE:
             self.label_raw_pint.configure(
                 text=f"Pint Raw Voltage: {sample.raw_int:+.6f} V"
@@ -1041,6 +1108,10 @@ class SideApp(ctk.CTk):
 
         self.update_comparison_labels()
 
+    # -----------------------------------------------------------------------------
+    # 8.2 DETECT AND COUNT FRINGES
+    # -----------------------------------------------------------------------------
+
     def update_accumulated_fringes(self, voltage):
 
         self.smoothed_voltage_history.append(
@@ -1055,7 +1126,6 @@ class SideApp(ctk.CTk):
             / len(self.smoothed_voltage_history)
         )
 
-        # --- 1. Absolute threshold state updates ---
         if smooth_voltage < self.dark_threshold:
             self.dark_counter += 1
         else:
@@ -1069,7 +1139,6 @@ class SideApp(ctk.CTk):
         else:
             self.bright_counter = 0
 
-        # --- 2. Relative hysteresis peak-valley state updates ---
         if self.fringe_detect_state == "unknown":
             self.fringe_current_max = smooth_voltage
             self.fringe_current_min = smooth_voltage
@@ -1095,7 +1164,6 @@ class SideApp(ctk.CTk):
                 if self.half_fringe_count >= 2:
                     hyst_triggered = True
 
-        # --- 3. Evaluate combined condition with cooldown ---
         cooldown_ok = (
             time.time() - self.last_count_time
         ) > FRINGE_COOLDOWN
@@ -1108,12 +1176,10 @@ class SideApp(ctk.CTk):
         if (abs_triggered or hyst_triggered) and cooldown_ok:
             self.accumulated_fringes += 1
 
-            # Reset absolute thresholds state
             self.was_dark = False
             self.dark_counter = 0
             self.bright_counter = 0
 
-            # Reset relative tracking state
             self.fringe_detect_state = "unknown"
             self.fringe_current_max = smooth_voltage
             self.fringe_current_min = smooth_voltage
@@ -1124,12 +1190,20 @@ class SideApp(ctk.CTk):
 
         return False
 
+    # -----------------------------------------------------------------------------
+    # 8.4 APPEND RAW VOLTAGE TO HISTORY
+    # -----------------------------------------------------------------------------
+
     def append_raw_history(self, raw_voltage):
 
         self.raw_voltage_history.append(raw_voltage)
 
         if len(self.raw_voltage_history) > RAW_HISTORY_LENGTH:
             self.raw_voltage_history.pop(0)
+
+    # -----------------------------------------------------------------------------
+    # 8.5 LIVE VOLTAGE PLOT UPDATE
+    # -----------------------------------------------------------------------------
 
     def update_plot(self, reset=False):
 
@@ -1154,12 +1228,20 @@ class SideApp(ctk.CTk):
         self.plot_axis.autoscale_view()
         self.plot_canvas.draw_idle()
 
+    # -----------------------------------------------------------------------------
+    # 8.6 SHOW MONITORING ERROR
+    # -----------------------------------------------------------------------------
+
     def show_error(self, error):
 
         self.status.configure(
             text=f"Status: {error}",
             text_color=RED_COLOR
         )
+
+    # -----------------------------------------------------------------------------
+    # 8.7 RESET UI AFTER MONITORING STOPS
+    # -----------------------------------------------------------------------------
 
     def finish_stopped_ui(self):
 
@@ -1179,9 +1261,17 @@ class SideApp(ctk.CTk):
                 text_color=TEXT_COLOR
             )
 
+    # -----------------------------------------------------------------------------
+    # 5.2 RESET BUTTON
+    # -----------------------------------------------------------------------------
+
     def restart(self):
 
-        self.restart_values_only()
+        self.restart_values_only() # button calls "restart" function, which forwards to "restart_values_only"
+
+    # -----------------------------------------------------------------------------
+    # 5.2.1 RESET VALUES ONLY
+    # -----------------------------------------------------------------------------
 
     def restart_values_only(self):
 
@@ -1192,6 +1282,7 @@ class SideApp(ctk.CTk):
         self.latest_voltage = 0.0
         self.raw_voltage_history = []
         self.smoothed_voltage_history = []
+        #defines what the values should look like after pressing reset
         self.accumulated_fringes = 0
         self.was_dark = False
         self.dark_counter = 0
@@ -1203,7 +1294,7 @@ class SideApp(ctk.CTk):
         self.fringe_current_min = 0.0
         self.half_fringe_count = 0
 
-        self.reset_stage_movement_tracking()
+        self.reset_stage_movement_tracking() # function defined later
 
         self.label_um.configure(
             text="Distance from Fringes: 0.000 um"
@@ -1273,18 +1364,19 @@ class SideApp(ctk.CTk):
         self.update_plot(reset=True)
         self.update_comparison_labels(0.0)
 
-    # -------------------------------------------------------------------------
-    # Stage control
-    # -------------------------------------------------------------------------
-
     def parse_entry_float(self, entry):
 
         return float(
             entry.get().replace(",", ".")
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.6 READ STEP SIZE FROM THE UI
+    # -----------------------------------------------------------------------------
+
     def get_step_size(self):
 
+        #convert the user input from the UI into something readable for the program
         try:
             value = self.parse_entry_float(
                 self.step_entry
@@ -1301,7 +1393,11 @@ class SideApp(ctk.CTk):
                 text="Status: invalid step size",
                 text_color=RED_COLOR
             )
-            return 0.0001
+            return 0.0001 # safe default size when step size invalid
+
+    # -----------------------------------------------------------------------------
+    # 5.6.1 READ STAGE SPEED FROM THE UI
+    # -----------------------------------------------------------------------------
 
     def get_stage_speed(self):
 
@@ -1323,8 +1419,13 @@ class SideApp(ctk.CTk):
             )
             return None
 
+    # -----------------------------------------------------------------------------
+    # 5.8 APPLY A NEW LASER WAVELENGTH
+    # -----------------------------------------------------------------------------
+
     def apply_wavelength(self):
 
+        # get the new laser wavelenght from the UI
         try:
             wavelength_nm = self.parse_entry_float(
                 self.wavelength_entry
@@ -1351,6 +1452,7 @@ class SideApp(ctk.CTk):
             self.laser_wavelength_nm
         )
 
+        #clear old suggested stepsize
         self.step_entry.delete(0, "end")
         self.step_entry.insert(
             0,
@@ -1361,6 +1463,10 @@ class SideApp(ctk.CTk):
             text=f"Wavelength set to {self.laser_wavelength_nm:.1f} nm",
             text_color=GREEN_COLOR
         )
+
+    # -----------------------------------------------------------------------------
+    # 5.6.2 APPLY STAGE SPEED
+    # -----------------------------------------------------------------------------
 
     def apply_stage_speed(self, update_status=True):
 
@@ -1403,6 +1509,10 @@ class SideApp(ctk.CTk):
 
         return True
 
+    # -----------------------------------------------------------------------------
+    # 6.6 STAGE CONTROL HELPER
+    # -----------------------------------------------------------------------------
+
     def prepare_stage_for_move(self):
 
         if not self.stage_connected:
@@ -1422,6 +1532,10 @@ class SideApp(ctk.CTk):
         return self.apply_stage_speed(
             update_status=False
         )
+
+    # -----------------------------------------------------------------------------
+    # 6.1 MOVE STAGE TO AN ABSOLUTE POSITION
+    # -----------------------------------------------------------------------------
 
     def start_stage_move_to(self, target_mm, start_pos=None):
 
@@ -1470,6 +1584,10 @@ class SideApp(ctk.CTk):
             daemon=True
         ).start()
 
+    # -----------------------------------------------------------------------------
+    # 6.2 MOVE STAGE BY A RELATIVE DISTANCE
+    # -----------------------------------------------------------------------------
+
     def start_stage_move_by(self, move_mm):
 
         if not self.stage_connected:
@@ -1485,6 +1603,10 @@ class SideApp(ctk.CTk):
             start_pos + move_mm,
             start_pos=start_pos
         )
+
+    # -----------------------------------------------------------------------------
+    # 6.3 MOVE STAGE TO TARGET IN STEPS
+    # -----------------------------------------------------------------------------
 
     def start_stage_move_to_stepped(
         self,
@@ -1509,6 +1631,7 @@ class SideApp(ctk.CTk):
             )
             return
 
+        #safe the values for the stage_ui_loop
         self.stage_start_position = start_pos
         self.stage_movement_before_move = self.total_stage_movement
         self.reset_stage_speed_tracking(start_pos)
@@ -1527,11 +1650,16 @@ class SideApp(ctk.CTk):
             )
             return
 
+        #if none of the above cases stops the stage from moving, create a movement thread and start the movement
         threading.Thread(
             target=self.stage_stepped_move_worker,
             args=(start_pos, target_mm, step_mm, pause_s, label_prefix),
             daemon=True
         ).start()
+
+    # -----------------------------------------------------------------------------
+    # 6.4 MOVE STAGE RELATIVELY IN STEPS
+    # -----------------------------------------------------------------------------
 
     def start_stage_move_by_steps(
         self,
@@ -1541,7 +1669,8 @@ class SideApp(ctk.CTk):
         label_prefix="Moving"
     ):
 
-        if not self.stage_connected:
+        #security checks so the code doesnt crash
+        if not self.stage_connected: # translation stage connected?
             self.status.configure(
                 text="Stage not connected",
                 text_color=RED_COLOR
@@ -1556,6 +1685,10 @@ class SideApp(ctk.CTk):
             pause_s=pause_s,
             label_prefix=label_prefix
         )
+
+    # -----------------------------------------------------------------------------
+    # 6.5 WORKER FOR STEPPED MOVEMENT
+    # -----------------------------------------------------------------------------
 
     def stage_stepped_move_worker(
         self,
@@ -1632,8 +1765,13 @@ class SideApp(ctk.CTk):
             self.finish_stage_move(current_pos)
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.1 TRACK NORMAL STAGE MOVEMENT
+    # -----------------------------------------------------------------------------
+
     def stage_ui_loop(self):
 
+        #how much did the stage move befor the current movement? use this as base
         movement_base = self.stage_movement_before_move
 
         while self.stage.is_moving:
@@ -1662,6 +1800,10 @@ class SideApp(ctk.CTk):
             self.finish_stage_move(p)
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.1.1 FINISH STAGE MOVE
+    # -----------------------------------------------------------------------------
+
     def finish_stage_move(self, pos):
 
         moved = abs(
@@ -1680,11 +1822,19 @@ class SideApp(ctk.CTk):
             text_color=GREEN_COLOR
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.9 STAGE BUTTON ACTIONS
+    # -----------------------------------------------------------------------------
+
     def move_to_min(self):
 
         self.start_stage_move_to(
             self.stage.min_position
         )
+
+    # -----------------------------------------------------------------------------
+    # 5.9.1 STEP NEGATIVE
+    # -----------------------------------------------------------------------------
 
     def step_negative(self):
 
@@ -1692,11 +1842,19 @@ class SideApp(ctk.CTk):
             -self.get_step_size()
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.9.2 MOVE TO CENTER
+    # -----------------------------------------------------------------------------
+
     def move_to_center(self):
 
-        self.start_stage_move_to_stepped(
+        self.start_stage_move_to_stepped( # move to center button also goes in steps
             0.0
         )
+
+    # -----------------------------------------------------------------------------
+    # 5.9.3 STEP POSITIVE
+    # -----------------------------------------------------------------------------
 
     def step_positive(self):
 
@@ -1704,11 +1862,19 @@ class SideApp(ctk.CTk):
             self.get_step_size()
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.9.4 MOVE TO MAX
+    # -----------------------------------------------------------------------------
+
     def move_to_max(self):
 
         self.start_stage_move_to(
             self.stage.max_position
         )
+
+    # -----------------------------------------------------------------------------
+    # 5.9.5 MOVE TO TARGET FROM UI
+    # -----------------------------------------------------------------------------
 
     def move_to_target(self):
 
@@ -1727,6 +1893,10 @@ class SideApp(ctk.CTk):
             target_mm
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.9.6 MOVE DISTANCE FROM UI
+    # -----------------------------------------------------------------------------
+
     def move_distance(self):
 
         try:
@@ -1744,6 +1914,10 @@ class SideApp(ctk.CTk):
             distance_mm
         )
 
+    # -----------------------------------------------------------------------------
+    # 5.9.7 STOP STAGE ACTION
+    # -----------------------------------------------------------------------------
+
     def stop_stage(self):
 
         if self.stage_connected:
@@ -1757,6 +1931,11 @@ class SideApp(ctk.CTk):
             )
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.2 SHOW INITIAL STAGE POSITION
+    # -----------------------------------------------------------------------------
+
+    #after calibration UI is filled with current stage position
     def update_stage_position_once(self):
 
         if self.stage_connected:
@@ -1770,6 +1949,10 @@ class SideApp(ctk.CTk):
                 text="Status: Stage not connected",
                 text_color=ORANGE_COLOR
             )
+
+    # -----------------------------------------------------------------------------
+    # 7.3 UPDATE STAGE MOVEMENT DISPLAY
+    # -----------------------------------------------------------------------------
 
     def update_stage_labels(self, pos, moved, movement_base=None):
 
@@ -1797,10 +1980,18 @@ class SideApp(ctk.CTk):
             current_total_stage_movement
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.5 RESET STAGE SPEED TRACKING
+    # -----------------------------------------------------------------------------
+
     def reset_stage_speed_tracking(self, pos):
 
         self.last_stage_speed_position = pos
         self.last_stage_speed_time = time.time()
+
+    # -----------------------------------------------------------------------------
+    # 7.6 UPDATE STAGE SPEED DISPLAY
+    # -----------------------------------------------------------------------------
 
     def update_stage_speed_label(self, pos):
 
@@ -1829,18 +2020,22 @@ class SideApp(ctk.CTk):
             text=f"Movement Speed: {speed_mm_s:.6f} mm/s"
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.4 RESET STAGE MOVEMENT TRACKING
+    # -----------------------------------------------------------------------------
+
     def reset_stage_movement_tracking(self, pos=None):
 
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
 
-        if pos is not None:
+        if pos is not None: # use provided position as new reference
             self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-        elif self.stage_connected:
+        elif self.stage_connected: # if the stage is connected use actual hardware position as reference
             self.stage_reference_position = self.stage.get_position()
         else:
             self.stage_reference_position = 0.0
@@ -1852,6 +2047,11 @@ class SideApp(ctk.CTk):
             text="Movement Speed: 0.000000 mm/s"
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
+    # -----------------------------------------------------------------------------
+
+    #stage movement distance is compared with distance calculated from counted fringes
     def update_comparison_labels(self, driven_mm=None):
 
         if driven_mm is None:
@@ -1876,9 +2076,9 @@ class SideApp(ctk.CTk):
             text=f"Difference: {difference_mm:.6f} mm"
         )
 
-    # -------------------------------------------------------------------------
-    # Shutdown
-    # -------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # 8.8 RUN STAGE MOTION BY PARAMETERS
+    # -----------------------------------------------------------------------------
 
     def run_stage_motion_by_parameters(self):
 
@@ -2017,17 +2217,21 @@ class SideApp(ctk.CTk):
                 self.finish_stage_move(p)
             )
 
+    # -----------------------------------------------------------------------------
+    # 7.7 MOVE STAGE DURING CALIBRATION
+    # -----------------------------------------------------------------------------
+
     def calibration_stage_motion(self):
 
         try:
-            if not self.stage_connected:
+            if not self.stage_connected: # refuse movement commands when stage is not connected
                 return
 
-            start_pos = self.stage.get_position()
+            start_pos = self.stage.get_position() # current stage position as movement start
             step_mm = 0.0001
             steps = 8
 
-            # Move forward in 8 steps
+            # move forward in 4 steps
             for i in range(1, steps + 1):
                 if not self.is_monitoring:
                     return
@@ -2043,7 +2247,7 @@ class SideApp(ctk.CTk):
 
                 time.sleep(0.25)
 
-            # Move backward in 8 steps back to start_pos
+            # move back in 4 steps
             for i in range(steps - 1, -1, -1):
                 if not self.is_monitoring:
                     return
@@ -2062,6 +2266,10 @@ class SideApp(ctk.CTk):
         finally:
             self.after(0, self.finish_calibration_movement)
 
+    # -----------------------------------------------------------------------------
+    # 7.10 FINISH CALIBRATION RESET
+    # -----------------------------------------------------------------------------
+
     def finish_calibration_movement(self):
 
         if self.stage_connected:
@@ -2075,6 +2283,10 @@ class SideApp(ctk.CTk):
             text="Monitoring running",
             text_color=GREEN_COLOR
         )
+
+    # -----------------------------------------------------------------------------
+    # 9.1 SHUT DOWN HARDWARE CLEANLY
+    # -----------------------------------------------------------------------------
 
     def on_close(self):
 
@@ -2092,12 +2304,16 @@ class SideApp(ctk.CTk):
 
         self.destroy()
 
+# -----------------------------------------------------------------------------
+# 9. PROGRAM START
+# -----------------------------------------------------------------------------
 
+# 9. PROGRAM START
 if __name__ == "__main__":
 
     app = SideApp()
     app.protocol(
-        "WM_DELETE_WINDOW",
+        "WM_DELETE_WINDOW", # connect window close button to cleanup routine
         app.on_close
     )
-    app.mainloop()
+    app.mainloop() # start the graphical application loop

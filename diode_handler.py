@@ -1,31 +1,62 @@
+# TABLE OF CONTENTS
+# 1. Imports
+# 2. Diode setup constants
+# 3. Helper functions
+# 4. Dataclasses and Reader/Counter/Handler classes
+
+
+# -----------------------------------------------------------------------------
+# 1. IMPORTS
+# -----------------------------------------------------------------------------
+
 import math
 import time
 from dataclasses import dataclass
 
+# -----------------------------------------------------------------------------
+# 2. DIODE SETUP CONSTANTS
+# -----------------------------------------------------------------------------
 
-# Single-diode readout uses one NI analog input first.
 PHOTODIODE_CHANNEL = "Dev1/ai0"
 PHOTODIODE_REF_CHANNEL = "Dev1/ai1"
 
-# Set to True to use reference photodiode (Pl) and measure Pint/Pl ratio.
-# Set to False to fall back to a single photodiode measuring Pint raw voltage only.
 USE_REFERENCE_DIODE = True
 
-# S1 is treated as cosine, S2 as sine for later quadrature readout.
 PHOTODIODE_COS_CHANNEL = "Dev1/ai0"
 PHOTODIODE_SIN_CHANNEL = "Dev1/ai1"
+
+CALIBRATION_SECONDS = 5.0
+SAMPLE_INTERVAL_S = 0.005
+
+# -----------------------------------------------------------------------------
+# 3. HELPER FUNCTIONS
+# -----------------------------------------------------------------------------
 
 LASER_WAVELENGTH_NM = 780.0
 PHASE_DIRECTION_SIGN = 1
 MIN_SIGNAL_RADIUS = 0.05
-CALIBRATION_SECONDS = 5.0
-SAMPLE_INTERVAL_S = 0.005
-
-
 def compute_fringe_distance_mm(wavelength_nm):
 
     return (wavelength_nm / 2) / 1_000_000
 
+def wrap_to_pi(angle_rad):
+
+    return (angle_rad + math.pi) % (2 * math.pi) - math.pi
+
+def completed_signed_fringes(fringe_position):
+
+    if fringe_position == 0:
+        return 0
+
+    sign = 1 if fringe_position > 0 else -1
+
+    return sign * math.floor(
+        abs(fringe_position)
+    )
+
+# -----------------------------------------------------------------------------
+# 4. DATACLASSES AND READER/COUNTER/HANDLER CLASSES
+# -----------------------------------------------------------------------------
 
 @dataclass
 class SingleDiodeCalibration:
@@ -36,7 +67,6 @@ class SingleDiodeCalibration:
     scale_voltage: float
     sample_count: int
 
-
 @dataclass
 class SingleDiodeSample:
 
@@ -45,13 +75,20 @@ class SingleDiodeSample:
     normalized_voltage: float
     valid: bool
 
-
 class NISingleDiodeReader:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self, channel=PHOTODIODE_CHANNEL):
 
         self.channel = channel
         self.task = None
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -64,6 +101,10 @@ class NISingleDiodeReader:
 
         return True
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         if self.task is None:
@@ -73,14 +114,21 @@ class NISingleDiodeReader:
             self.task.read()
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
+
     def close(self):
 
         if self.task is not None:
             self.task.close()
             self.task = None
 
-
 class SingleDiodeCounter:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self):
 
@@ -141,8 +189,11 @@ class SingleDiodeCounter:
             valid=True
         )
 
-
 class SingleDiodeHandler:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self, channel=PHOTODIODE_CHANNEL):
 
@@ -150,6 +201,10 @@ class SingleDiodeHandler:
             channel=channel
         )
         self.counter = SingleDiodeCounter()
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -190,33 +245,23 @@ class SingleDiodeHandler:
             samples
         )
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         return self.counter.update(
             self.reader.read()
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
+
     def close(self):
 
         self.reader.close()
-
-
-def wrap_to_pi(angle_rad):
-
-    return (angle_rad + math.pi) % (2 * math.pi) - math.pi
-
-
-def completed_signed_fringes(fringe_position):
-
-    if fringe_position == 0:
-        return 0
-
-    sign = 1 if fringe_position > 0 else -1
-
-    return sign * math.floor(
-        abs(fringe_position)
-    )
-
 
 @dataclass
 class DiodeCalibration:
@@ -230,7 +275,6 @@ class DiodeCalibration:
     cos_scale: float
     sin_scale: float
     sample_count: int
-
 
 @dataclass
 class DiodeSample:
@@ -251,8 +295,11 @@ class DiodeSample:
     direction: str
     valid: bool
 
-
 class NIDiodeReader:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(
         self,
@@ -263,6 +310,10 @@ class NIDiodeReader:
         self.cos_channel = cos_channel
         self.sin_channel = sin_channel
         self.task = None
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -278,6 +329,10 @@ class NIDiodeReader:
 
         return True
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         if self.task is None:
@@ -292,14 +347,21 @@ class NIDiodeReader:
 
         return float(values[0]), float(values[1])
 
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
+
     def close(self):
 
         if self.task is not None:
             self.task.close()
             self.task = None
 
-
 class DiodeQuadratureCounter:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(
         self,
@@ -480,8 +542,11 @@ class DiodeQuadratureCounter:
             * self.fringe_distance_mm
         )
 
-
 class DiodeHandler:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(
         self,
@@ -499,6 +564,10 @@ class DiodeHandler:
             wavelength_nm=wavelength_nm,
             phase_direction_sign=phase_direction_sign
         )
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -539,6 +608,10 @@ class DiodeHandler:
             samples
         )
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         raw_cos, raw_sin = self.reader.read()
@@ -548,10 +621,13 @@ class DiodeHandler:
             raw_sin
         )
 
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
+
     def close(self):
 
         self.reader.close()
-
 
 @dataclass
 class ReferenceDiodeCalibration:
@@ -561,7 +637,6 @@ class ReferenceDiodeCalibration:
     offset_ratio: float
     scale_ratio: float
     sample_count: int
-
 
 @dataclass
 class ReferenceDiodeSample:
@@ -573,14 +648,21 @@ class ReferenceDiodeSample:
     normalized_ratio: float
     valid: bool
 
-
 class NIReferenceDiodeReader:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODE_REF_CHANNEL if 'PHOTODE_REF_CHANNEL' in globals() else PHOTODIODE_REF_CHANNEL):
 
         self.int_channel = int_channel
         self.ref_channel = ref_channel
         self.task = None
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -596,6 +678,10 @@ class NIReferenceDiodeReader:
 
         return True
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         if self.task is None:
@@ -610,14 +696,21 @@ class NIReferenceDiodeReader:
 
         return float(values[0]), float(values[1])
 
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
+
     def close(self):
 
         if self.task is not None:
             self.task.close()
             self.task = None
 
-
 class ReferenceDiodeCounter:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self):
 
@@ -695,8 +788,11 @@ class ReferenceDiodeCounter:
             valid=True
         )
 
-
 class ReferenceDiodeHandler:
+
+    # -----------------------------------------------------------------------------
+    # 2.1 INITIAL STATE AND SETTINGS
+    # -----------------------------------------------------------------------------
 
     def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODIODE_REF_CHANNEL):
 
@@ -705,6 +801,10 @@ class ReferenceDiodeHandler:
             ref_channel=ref_channel
         )
         self.counter = ReferenceDiodeCounter()
+
+    # -----------------------------------------------------------------------------
+    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # -----------------------------------------------------------------------------
 
     def connect(self):
 
@@ -745,6 +845,10 @@ class ReferenceDiodeHandler:
             samples
         )
 
+    # -----------------------------------------------------------------------------
+    # 4.1 READ VALUES
+    # -----------------------------------------------------------------------------
+
     def read(self):
 
         raw_int, raw_ref = self.reader.read()
@@ -753,6 +857,10 @@ class ReferenceDiodeHandler:
             raw_int,
             raw_ref
         )
+
+    # -----------------------------------------------------------------------------
+    # 7.1 CLOSE RESOURCES
+    # -----------------------------------------------------------------------------
 
     def close(self):
 
