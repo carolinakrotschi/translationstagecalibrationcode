@@ -1,4 +1,4 @@
-#works
+#works, identical to main.py except for "from stage_controller_thor import StageController"
 
 # TABLE OF CONTENTS
 # 1. "Backup plan"/Basic Setting

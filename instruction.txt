@@ -1,3 +1,25 @@
+This document serves as an instruction, when the setup is already built and in need to connect to the software
+For any component information / which exact optical components I used, you can scan through my thesis
+
+connecting the Hardware
+1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
+2. for the stage
+    2.1 pi stage
+        2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
+        2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
+    2.2 Thorlabs Kinesis Stage (e.g. LTS150 / LTS300)
+        2.2.1 Serial Number Setup:
+              - The code uses a default serial number "45517804" (configured in stage_controller_thorlabs.py).
+              - If your controller has a different serial number, you must change it in stage_controller_thorlabs.py inside the __init__ method: self.serial_no = "YOUR_SERIAL_NUMBER".
+              - You can find the serial number on the label on the physical controller box or in the Kinesis software.
+        2.2.2 Travel Limits:
+              - In stage_controller_thorlabs.py, change self.min_position and self.max_position. By default, it is configured for 300mm travel range (0.0 to 300.0)
+        2.2.3 CRITICAL - Connection Lock:
+              - Open Kinesis to verify that the stage is working/homed if needed.
+              - IMPORTANT: You MUST close the Thorlabs Kinesis software (and any Simulator) completely before running the Python script. If Kinesis is open, it locks the USB port and the Python script will fail to connect.
+3. close both Kinesis and ThorCam apps and then run the program
+
+
 Starting the software
 0. Important: ThorCam, Thorlabs Kinesis, and PIMikromove are Hardware-Drivers/Control-Software. They need to be installed on the computer to communicate with the hardware.
 1. install git for windows and then go to powershell and try git --version
@@ -26,26 +48,11 @@ Starting the software
             then e.g. python main.py
 
 
-connecting the Hardware
-1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
-2. for the stage
-    2.1 pi stage
-        2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
-        2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
-    2.2 Thorlabs Kinesis Stage (e.g. LTS150 / LTS300)
-        2.2.1 Serial Number Setup:
-              - The code uses a default serial number "45517804" (configured in stage_controller_thorlabs.py).
-              - If your controller has a different serial number, you must change it in stage_controller_thorlabs.py inside the __init__ method: self.serial_no = "YOUR_SERIAL_NUMBER".
-              - You can find the serial number on the label on the physical controller box or in the Kinesis software.
-        2.2.2 Travel Limits:
-              - In stage_controller_thorlabs.py, change self.min_position and self.max_position. By default, it is configured for 300mm travel range (0.0 to 300.0)
-        2.2.3 CRITICAL - Connection Lock:
-              - Open Kinesis to verify that the stage is working/homed if needed.
-              - IMPORTANT: You MUST close the Thorlabs Kinesis software (and any Simulator) completely before running the Python script. If Kinesis is open, it locks the USB port and the Python script will fail to connect.
-3. close both Kinesis and ThorCam apps and then run the program
-
 
 
 if using photodiodes/front-back measurement
 1. download national instrument software https://www.ni.com/de/support/downloads/drivers/download.ni-daq-mx.html#590033
 2. python -m pip install nidaqmx or when still in conda environment  C:/Users/FIDOPA_3/anaconda3/python.exe -m pip install nidaqmx
+3. make sure, the beam is properly coupled into the photodiode (you can look at the "test device" window, that opens when you plug in the National Instruments usb device, that connects to the photodiodes)
+    3.1 check, if there is the equal amount of signal left blocking the beams one after another
+
