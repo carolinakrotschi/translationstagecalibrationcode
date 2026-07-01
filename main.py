@@ -79,7 +79,7 @@ LOCK_CORRECTION_COOLDOWN = 0.20
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 #mode for target, distance and center movements: "continuous" or "stepped"
 MODE = "continuous"
-CALIBRATION_SWEEP_DISTANCE_MM = 0.0004
+CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -2031,7 +2031,7 @@ class InterferometerApp(ctk.CTk):
 
                         self.bright_threshold = (
                             max_val
-                            - value_range * 0.40
+                            - value_range * 0.60
                         )
 
                         self.calibrating = False
