@@ -1,12 +1,14 @@
+#basically identical to side.py except for 2 photodiodes
+
 # TABLE OF CONTENTS
 # 1. Basic settings
-# 2. Imports
+# 2. Imports #NEW (obviously)
 # 3. Physical constants and colors
 # 4. SideApp class (UI)
 # 5. Monitoring and reset
 # 6. Translation stage control
 # 7. Calibration
-# 8. Diode loop and plotting
+# 8. Diode loop and plotting #NEW (values get devided by reference diode)
 # 9. Cleanup and program start
 
 

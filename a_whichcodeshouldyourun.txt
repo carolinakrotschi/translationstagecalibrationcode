@@ -10,4 +10,3 @@ Which code to use for what? A nomenclature guide
     - homodyne.py is basically main.py but for the quadrature homodyne interferometer (this means: 2 photodiodes!)
     - side.py is basically main.py but detection with a photodiode and not a camera
     - side_reference.py is side.py but with 2 photodiodes, where 1 serves as a reference to normalize the signal
-    - move.py is just a back check to see if the stage actually moves and a signal can be detected (only for photodiode detection)

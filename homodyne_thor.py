@@ -1,3 +1,5 @@
+# basically identical to homodyne.py, but we use the Thorlabs stage controller
+
 # TABLE OF CONTENTS
 # 1. Basic settings
 # 2. Imports

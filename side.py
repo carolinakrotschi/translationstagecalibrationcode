@@ -1,12 +1,14 @@
+# this code is basically identical with main.py except for some minor adjustments of the logik, because camera changed to photodiode
+
 # TABLE OF CONTENTS
 # 1. Basic settings
-# 2. Imports
+# 2. Imports #NEW (obviously changed for the PD)
 # 3. Physical constants and colors
-# 4. SideApp class (UI)
+# 4. SideApp class (UI) #NEW (here we dont have a live image, but a matplot of the signal)
 # 5. Monitoring and reset
 # 6. Translation stage control
-# 7. Calibration
-# 8. Diode loop and plotting
+# 7. Calibration #NEW (in main.py we use the pixel brightnesses for calibration, in side.py we use the diode voltage)
+# 8. Diode loop and plotting #NEW (instead of Bright/Dark Values, we use voltage difference as counting)
 # 9. Cleanup and program start
 
 

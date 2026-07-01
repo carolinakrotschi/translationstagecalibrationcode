@@ -1,3 +1,15 @@
+# TABLE OF CONTENTS
+# 1. Imports and CLR bindings
+# 2. StageController class and connection
+# 3. Reference and homing helpers
+# 4. Position querying and limits
+# 5. Motion commands (absolute, relative)
+# 6. Velocity and parameter configurations
+# 7. Cleanup and connection close
+
+# -----------------------------------------------------------------------------
+# 1. IMPORTS AND CLR BINDINGS
+# -----------------------------------------------------------------------------
 import time
 import threading
 import clr
@@ -13,6 +25,9 @@ from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
 REQUESTED_ACCELERATION = 0.0
 FALLBACK_MOVING_ACCELERATION = 1.0
 
+# -----------------------------------------------------------------------------
+# 2. STAGECONTROLLER CLASS AND CONNECTION
+# -----------------------------------------------------------------------------
 class StageController:
 
     def __init__(self, serial_no="45517804"):
@@ -91,6 +106,9 @@ class StageController:
             self.connected = False
             return False
 
+# -----------------------------------------------------------------------------
+# 3. REFERENCE AND HOMING HELPERS
+# -----------------------------------------------------------------------------
     def _wait_until_ready(self):
 
         time.sleep(2)
@@ -113,6 +131,9 @@ class StageController:
             print(self.last_error)
             return False
 
+# -----------------------------------------------------------------------------
+# 4. POSITION QUERYING AND LIMITS
+# -----------------------------------------------------------------------------
     def get_position(self):
 
         if not self.connected:
@@ -133,6 +154,9 @@ class StageController:
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
 
+# -----------------------------------------------------------------------------
+# 5. MOTION COMMANDS
+# -----------------------------------------------------------------------------
     def move_absolute(self, target_mm):
 
         if not self.connected:
@@ -166,6 +190,9 @@ class StageController:
     def move_relative(self, delta):
         return self.move_absolute(self.get_position() + delta)
 
+# -----------------------------------------------------------------------------
+# 6. VELOCITY AND PARAMETER CONFIGURATIONS
+# -----------------------------------------------------------------------------
     def set_velocity(self, vel=None):
 
         if vel is None:
@@ -223,6 +250,9 @@ class StageController:
             self.current_position = self.get_position()
             self.target_position = self.current_position
 
+# -----------------------------------------------------------------------------
+# 7. CLEANUP AND CONNECTION CLOSE
+# -----------------------------------------------------------------------------
     def close(self):
 
         try:

@@ -1,3 +1,15 @@
+# TABLE OF CONTENTS
+# 1. Imports
+# 2. StageController class
+# 3. Axis referencing
+# 4. Position querying
+# 5. Motion commands
+# 6. Velocity and step size
+# 7. Cleanup
+
+# -----------------------------------------------------------------------------
+# 1. IMPORTS
+# -----------------------------------------------------------------------------
 import threading
 import time
 
@@ -13,6 +25,9 @@ REFERENCE_TIMEOUT_S = 180
 MOVE_POSITION_TOLERANCE_MM = 0.000002
 
 
+# -----------------------------------------------------------------------------
+# 2. STAGECONTROLLER CLASS  
+# -----------------------------------------------------------------------------
 class StageController:
 
     def __init__(self, controller_name=STAGE_CONTROLLER_NAME):
@@ -100,6 +115,9 @@ class StageController:
 
         raise RuntimeError("No PI stage found via USB or TCP/IP")
 
+# -----------------------------------------------------------------------------
+# 3. AXIS REFERENCING 
+# -----------------------------------------------------------------------------
     def _prepare_axis_for_motion(self):
         self._set_servo(True)
 
@@ -158,6 +176,9 @@ class StageController:
                 f"{REFERENCE_MODE}"
             )
 
+# -----------------------------------------------------------------------------
+# 4. POSITION QUERYING 
+# -----------------------------------------------------------------------------
     def get_position(self):
 
         if not self.connected or self.device is None:
@@ -175,6 +196,9 @@ class StageController:
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
 
+# -----------------------------------------------------------------------------
+# 5. MOTION COMMANDS
+# -----------------------------------------------------------------------------
     def move_absolute(self, target_mm):
 
         if not self.connected or self.device is None:
@@ -289,6 +313,9 @@ class StageController:
     def move_to_min(self):
         return self.move_absolute(self.min_position)
 
+# -----------------------------------------------------------------------------
+# 6. VELOCITY 
+# -----------------------------------------------------------------------------
     def set_step_size(self, step_size):
         self.step_size = float(step_size)
 
@@ -327,6 +354,9 @@ class StageController:
         self.current_position = self.get_position()
         return True
 
+# -----------------------------------------------------------------------------
+# 7. CLEANUP
+# -----------------------------------------------------------------------------
     def close(self):
         try:
             if self.device is not None:

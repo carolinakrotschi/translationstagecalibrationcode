@@ -1,12 +1,14 @@
+# this code is basically identical with side.py except for "from stage_controller_thor import StageController"
+
 # TABLE OF CONTENTS
 # 1. Basic settings
-# 2. Imports
+# 2. Imports 
 # 3. Physical constants and colors
-# 4. SideApp class (UI)
+# 4. SideApp class (UI) 
 # 5. Monitoring and reset
 # 6. Translation stage control
-# 7. Calibration
-# 8. Diode loop and plotting
+# 7. Calibration 
+# 8. Diode loop and plotting 
 # 9. Cleanup and program start
 
 

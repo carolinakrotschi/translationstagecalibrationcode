@@ -29,20 +29,22 @@ CALIBRATION_SECONDS = 5.0
 SAMPLE_INTERVAL_S = 0.005
 
 # -----------------------------------------------------------------------------
-# 3. HELPER FUNCTIONS
+# CALCULATE THE FRINGE DISTANCE
 # -----------------------------------------------------------------------------
-
-LASER_WAVELENGTH_NM = 780.0
-PHASE_DIRECTION_SIGN = 1
-MIN_SIGNAL_RADIUS = 0.05
 def compute_fringe_distance_mm(wavelength_nm):
 
     return (wavelength_nm / 2) / 1_000_000
 
+# -----------------------------------------------------------------------------
+# WRAP THE PHASE ANGLE TO PI
+# -----------------------------------------------------------------------------
 def wrap_to_pi(angle_rad):
 
     return (angle_rad + math.pi) % (2 * math.pi) - math.pi
 
+# -----------------------------------------------------------------------------
+# CALCULATE THE COMPLETED SIGNED FRINGES
+# -----------------------------------------------------------------------------
 def completed_signed_fringes(fringe_position):
 
     if fringe_position == 0:
@@ -78,18 +80,16 @@ class SingleDiodeSample:
 class NISingleDiodeReader:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE SINGLE DIODE CHANNEL
     # -----------------------------------------------------------------------------
-
     def __init__(self, channel=PHOTODIODE_CHANNEL):
 
         self.channel = channel
         self.task = None
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE SINGLE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         import nidaqmx
@@ -102,9 +102,8 @@ class NISingleDiodeReader:
         return True
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ THE RAW SINGLE DIODE VOLTAGE
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         if self.task is None:
@@ -115,9 +114,8 @@ class NISingleDiodeReader:
         )
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE SINGLE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         if self.task is not None:
@@ -127,9 +125,8 @@ class NISingleDiodeReader:
 class SingleDiodeCounter:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE COUNTER VARIABLES
     # -----------------------------------------------------------------------------
-
     def __init__(self):
 
         self.min_voltage = 0.0
@@ -139,6 +136,9 @@ class SingleDiodeCounter:
         self.calibration = None
         self.sample_count = 0
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE CALIBRATION OFFSET AND SCALE
+    # -----------------------------------------------------------------------------
     def calibrate_from_samples(self, raw_samples):
 
         if not raw_samples:
@@ -168,16 +168,25 @@ class SingleDiodeCounter:
 
         return self.calibration
 
+    # -----------------------------------------------------------------------------
+    # RESET THE SAMPLE COUNT
+    # -----------------------------------------------------------------------------
     def reset(self):
 
         self.sample_count = 0
 
+    # -----------------------------------------------------------------------------
+    # NORMALIZE THE VOLTAGE
+    # -----------------------------------------------------------------------------
     def normalize(self, raw_voltage):
 
         return (
             raw_voltage - self.offset_voltage
         ) / self.scale_voltage
 
+    # -----------------------------------------------------------------------------
+    # CREATE A NORMALIZED SAMPLE
+    # -----------------------------------------------------------------------------
     def update(self, raw_voltage):
 
         self.sample_count += 1
@@ -192,9 +201,8 @@ class SingleDiodeCounter:
 class SingleDiodeHandler:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE SINGLE DIODE HANDLER
     # -----------------------------------------------------------------------------
-
     def __init__(self, channel=PHOTODIODE_CHANNEL):
 
         self.reader = NISingleDiodeReader(
@@ -203,13 +211,15 @@ class SingleDiodeHandler:
         self.counter = SingleDiodeCounter()
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE SINGLE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         return self.reader.connect()
 
+    # -----------------------------------------------------------------------------
+    # CALIBRATE THE SINGLE DIODE
+    # -----------------------------------------------------------------------------
     def calibrate(
         self,
         seconds=CALIBRATION_SECONDS,
@@ -246,9 +256,8 @@ class SingleDiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ AND NORMALIZE THE VOLTAGE
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         return self.counter.update(
@@ -256,9 +265,8 @@ class SingleDiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE SINGLE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         self.reader.close()
@@ -298,9 +306,8 @@ class DiodeSample:
 class NIDiodeReader:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE QUADRATURE DIODE CHANNELS
     # -----------------------------------------------------------------------------
-
     def __init__(
         self,
         cos_channel=PHOTODIODE_COS_CHANNEL,
@@ -312,9 +319,8 @@ class NIDiodeReader:
         self.task = None
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE QUADRATURE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         import nidaqmx
@@ -330,9 +336,8 @@ class NIDiodeReader:
         return True
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ THE RAW VOLTAGES
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         if self.task is None:
@@ -348,9 +353,8 @@ class NIDiodeReader:
         return float(values[0]), float(values[1])
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE QUADRATURE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         if self.task is not None:
@@ -360,9 +364,8 @@ class NIDiodeReader:
 class DiodeQuadratureCounter:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE COUNTER VARIABLES
     # -----------------------------------------------------------------------------
-
     def __init__(
         self,
         wavelength_nm=LASER_WAVELENGTH_NM,
@@ -387,6 +390,9 @@ class DiodeQuadratureCounter:
         self.signed_fringes = 0
         self.total_abs_fringes = 0
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE CALIBRATION OFFSET AND SCALE
+    # -----------------------------------------------------------------------------
     def calibrate_from_samples(self, raw_samples):
 
         if not raw_samples:
@@ -433,6 +439,9 @@ class DiodeQuadratureCounter:
 
         return self.calibration
 
+    # -----------------------------------------------------------------------------
+    # RESET THE PHASE AND FRINGE COUNTS
+    # -----------------------------------------------------------------------------
     def reset(self):
 
         self.previous_phase_rad = None
@@ -440,6 +449,9 @@ class DiodeQuadratureCounter:
         self.signed_fringes = 0
         self.total_abs_fringes = 0
 
+    # -----------------------------------------------------------------------------
+    # NORMALIZE THE VOLTAGES
+    # -----------------------------------------------------------------------------
     def normalize(self, raw_cos, raw_sin):
 
         cos_value = (raw_cos - self.cos_offset) / self.cos_scale
@@ -447,6 +459,9 @@ class DiodeQuadratureCounter:
 
         return cos_value, sin_value
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE PHASE AND COUNT FRINGES
+    # -----------------------------------------------------------------------------
     def update(self, raw_cos, raw_sin):
 
         timestamp = time.time()
@@ -534,6 +549,9 @@ class DiodeQuadratureCounter:
             valid=True
         )
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE THE SIGNED DISTANCE IN MM
+    # -----------------------------------------------------------------------------
     def signed_distance_mm(self):
 
         return (
@@ -545,9 +563,8 @@ class DiodeQuadratureCounter:
 class DiodeHandler:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE QUADRATURE DIODE HANDLER
     # -----------------------------------------------------------------------------
-
     def __init__(
         self,
         cos_channel=PHOTODIODE_COS_CHANNEL,
@@ -566,13 +583,15 @@ class DiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE QUADRATURE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         return self.reader.connect()
 
+    # -----------------------------------------------------------------------------
+    # CALIBRATE THE QUADRATURE DIODES
+    # -----------------------------------------------------------------------------
     def calibrate(
         self,
         seconds=CALIBRATION_SECONDS,
@@ -609,9 +628,8 @@ class DiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ AND PROCESS THE VOLTAGES
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         raw_cos, raw_sin = self.reader.read()
@@ -622,9 +640,8 @@ class DiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE QUADRATURE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         self.reader.close()
@@ -651,9 +668,8 @@ class ReferenceDiodeSample:
 class NIReferenceDiodeReader:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE REFERENCE DIODE CHANNELS
     # -----------------------------------------------------------------------------
-
     def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODE_REF_CHANNEL if 'PHOTODE_REF_CHANNEL' in globals() else PHOTODIODE_REF_CHANNEL):
 
         self.int_channel = int_channel
@@ -661,9 +677,8 @@ class NIReferenceDiodeReader:
         self.task = None
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE REFERENCE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         import nidaqmx
@@ -679,9 +694,8 @@ class NIReferenceDiodeReader:
         return True
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ THE RAW VOLTAGES
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         if self.task is None:
@@ -697,9 +711,8 @@ class NIReferenceDiodeReader:
         return float(values[0]), float(values[1])
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE REFERENCE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         if self.task is not None:
@@ -709,9 +722,8 @@ class NIReferenceDiodeReader:
 class ReferenceDiodeCounter:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE COUNTER VARIABLES
     # -----------------------------------------------------------------------------
-
     def __init__(self):
 
         self.min_ratio = 0.0
@@ -721,6 +733,9 @@ class ReferenceDiodeCounter:
         self.calibration = None
         self.sample_count = 0
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE CALIBRATION OFFSET AND SCALE
+    # -----------------------------------------------------------------------------
     def calibrate_from_samples(self, raw_samples):
 
         if not raw_samples:
@@ -758,16 +773,25 @@ class ReferenceDiodeCounter:
 
         return self.calibration
 
+    # -----------------------------------------------------------------------------
+    # RESET THE SAMPLE COUNT
+    # -----------------------------------------------------------------------------
     def reset(self):
 
         self.sample_count = 0
 
+    # -----------------------------------------------------------------------------
+    # NORMALIZE THE RATIO
+    # -----------------------------------------------------------------------------
     def normalize(self, ratio):
 
         return (
             ratio - self.offset_ratio
         ) / self.scale_ratio
 
+    # -----------------------------------------------------------------------------
+    # CALCULATE THE RATIO AND NORMALIZE
+    # -----------------------------------------------------------------------------
     def update(self, raw_int, raw_ref):
 
         self.sample_count += 1
@@ -791,9 +815,8 @@ class ReferenceDiodeCounter:
 class ReferenceDiodeHandler:
 
     # -----------------------------------------------------------------------------
-    # 2.1 INITIAL STATE AND SETTINGS
+    # INITIALIZE THE REFERENCE DIODE HANDLER
     # -----------------------------------------------------------------------------
-
     def __init__(self, int_channel=PHOTODIODE_CHANNEL, ref_channel=PHOTODIODE_REF_CHANNEL):
 
         self.reader = NIReferenceDiodeReader(
@@ -803,13 +826,15 @@ class ReferenceDiodeHandler:
         self.counter = ReferenceDiodeCounter()
 
     # -----------------------------------------------------------------------------
-    # 3.1 CONNECT OR FALL BACK TO SIMULATION
+    # CONNECT TO THE REFERENCE DIODE HARDWARE
     # -----------------------------------------------------------------------------
-
     def connect(self):
 
         return self.reader.connect()
 
+    # -----------------------------------------------------------------------------
+    # CALIBRATE THE REFERENCE DIODES
+    # -----------------------------------------------------------------------------
     def calibrate(
         self,
         seconds=CALIBRATION_SECONDS,
@@ -846,9 +871,8 @@ class ReferenceDiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 4.1 READ VALUES
+    # READ AND PROCESS THE VOLTAGES
     # -----------------------------------------------------------------------------
-
     def read(self):
 
         raw_int, raw_ref = self.reader.read()
@@ -859,9 +883,8 @@ class ReferenceDiodeHandler:
         )
 
     # -----------------------------------------------------------------------------
-    # 7.1 CLOSE RESOURCES
+    # CLOSE THE REFERENCE DIODE CONNECTION
     # -----------------------------------------------------------------------------
-
     def close(self):
 
         self.reader.close()

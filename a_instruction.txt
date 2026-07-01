@@ -56,3 +56,21 @@ if using photodiodes/front-back measurement
 3. make sure, the beam is properly coupled into the photodiode (you can look at the "test device" window, that opens when you plug in the National Instruments usb device, that connects to the photodiodes)
     3.1 check, if there is the equal amount of signal left blocking the beams one after another
 
+
+if using the camera software and not all fringes get detected
+0. restart the software
+1. play with the velocity and see if it gets better
+2. use longer travel distances and see if it gets better
+3. adjust the values from which a fringe gets detected as dark or bright
+    #these values I found by experimenting with the setup work best for accurate fringe detection, but could need adjusting
+    self.dark_threshold = (
+        min_val
+        + value_range * 0.125 #<-- change this value if needed
+    )
+
+    self.bright_threshold = (
+        max_val
+        - value_range * 0.60 #<-- change this value if needed
+    )
+4. Don't touch the optical table!
+
