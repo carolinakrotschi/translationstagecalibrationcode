@@ -51,6 +51,7 @@ class StageController:
         self.max_position = 300.0
         self.home_on_connect = True
 
+    #connects the actual motor to the software
     def connect(self):
 
         try:
@@ -100,6 +101,7 @@ class StageController:
             self.current_position = self.get_position()
             return True
 
+        #in case of failure (cable unplugged, ...)
         except Exception as e:
             self.last_error = f"Stage connection error: {e}"
             print(self.last_error)
@@ -134,6 +136,7 @@ class StageController:
 # -----------------------------------------------------------------------------
 # 4. POSITION QUERYING AND LIMITS
 # -----------------------------------------------------------------------------
+    #for the UI it is essential, that the current position is always available
     def get_position(self):
 
         if not self.connected:
@@ -141,9 +144,10 @@ class StageController:
 
         for _ in range(5):
             try:
-                pos_str = str(self.device.Position).replace(",", ".")
+                pos_str = str(self.device.Position).replace(",", ".") #this gives the position
                 self.current_position = float(pos_str)
                 return self.current_position
+            #in case of failure (cable unplugged, ...)
             except Exception as e:
                 self.last_error = f"get_position error: {e}"
                 print(self.last_error)
@@ -151,12 +155,14 @@ class StageController:
 
         return self.current_position
 
+    #limits the position to the physical limits of the stage (0.0 mm to 300.0 mm)
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
 
 # -----------------------------------------------------------------------------
 # 5. MOTION COMMANDS
 # -----------------------------------------------------------------------------
+    #for driving to an absolute position, does that in the background, so that the UI is still usable
     def move_absolute(self, target_mm):
 
         if not self.connected:
@@ -174,19 +180,21 @@ class StageController:
 
         def worker():
             try:
-                self.device.MoveTo(Decimal(float(target_mm)), 180000)
-                self.current_position = self.get_position()
+                self.device.MoveTo(Decimal(float(target_mm)), 180000) #scan the motion command
+                self.current_position = self.get_position() #after arrival, question the position again
 
+            #in case of failure (cable unplugged, ...)
             except Exception as e:
                 self.last_error = f"Move error: {e}"
                 print(self.last_error)
 
             finally:
-                self.is_moving = False
+                self.is_moving = False #at the end, when the stage is not moving anymore, set is_moving to false, so that the UI knows that the stage is not moving anymore
 
         threading.Thread(target=worker, daemon=True).start()
         return True
 
+    #moves stage by relative distance
     def move_relative(self, delta):
         return self.move_absolute(self.get_position() + delta)
 
@@ -223,15 +231,17 @@ class StageController:
                 self.acceleration = FALLBACK_MOVING_ACCELERATION
 
             params.Acceleration = Decimal(self.acceleration)
-            self.device.SetVelocityParams(params)
+            self.device.SetVelocityParams(params) #send velocity command to hardware
             self.velocity = vel
             return True
 
+        #in case of failure (cable unplugged, ...)
         except Exception as e:
             self.last_error = f"Velocity error: {e}"
             print(self.last_error)
             return False
 
+    #stops the stage (emergency stop when UI stop button is pressed)
     def stop(self):
 
         stopped = False
@@ -240,13 +250,14 @@ class StageController:
             if self.connected:
                 self.device.StopImmediate()
                 stopped = True
+        #in case of failure (cable unplugged, ...)
         except Exception as e:
             self.last_error = f"Stop error: {e}"
             print(self.last_error)
 
         if stopped:
             time.sleep(0.05)
-            self.is_moving = False
+            self.is_moving = False #adjusts the position to the point where the stage stopped
             self.current_position = self.get_position()
             self.target_position = self.current_position
 
@@ -261,6 +272,7 @@ class StageController:
                 self.device.Disconnect()
                 self.connected = False
 
+        #in case of failure (cable unplugged, ...)
         except Exception as e:
             self.last_error = f"Close error: {e}"
             print(self.last_error)
