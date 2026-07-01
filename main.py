@@ -54,7 +54,6 @@ LASER_WAVELENGTH_NM = 780.0
 FRINGE_DISTANCE_MM = (
     (LASER_WAVELENGTH_NM / 2) / 1_000_000
     #1000000 is from nm to mm
-    #second division by 2 is because in a Michelson interferometer, the stage movement causes a change in path length that is twice the stage movement, so the fringe distance corresponds to half the wavelength of the laser light
 )
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
@@ -1185,7 +1184,7 @@ class InterferometerApp(ctk.CTk):
     
     def compute_fringe_distance(self, wavelength_nm):
 
-        return (wavelength_nm / 2) / 1_000_000 / 2
+        return (wavelength_nm / 2) / 1_000_000
     # -----------------------------------------------------------------------------
     # 5.8 APPLY A NEW LASER WAVELENGTH
     # -----------------------------------------------------------------------------
