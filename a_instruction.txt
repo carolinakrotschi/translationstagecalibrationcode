@@ -6,14 +6,14 @@ connecting the Hardware
 2. for the stage
     2.1 pi stage
         2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
-        2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
+        2.1.2 in handler_stage.py change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
     2.2 Thorlabs Kinesis Stage (e.g. LTS150 / LTS300)
         2.2.1 Serial Number Setup:
-              - The code uses a default serial number "45517804" (configured in stage_controller_thorlabs.py).
-              - If your controller has a different serial number, you must change it in stage_controller_thorlabs.py inside the __init__ method: self.serial_no = "YOUR_SERIAL_NUMBER".
+              - The code uses a default serial number "45517804" (configured in thor_handler_stage.py).
+              - If your controller has a different serial number, you must change it in thor_handler_stage.py inside the __init__ method: self.serial_no = "YOUR_SERIAL_NUMBER".
               - You can find the serial number on the label on the physical controller box or in the Kinesis software.
         2.2.2 Travel Limits:
-              - In stage_controller_thorlabs.py, change self.min_position and self.max_position. By default, it is configured for 300mm travel range (0.0 to 300.0)
+              - In thor_handler_stage.py, change self.min_position and self.max_position. By default, it is configured for 300mm travel range (0.0 to 300.0)
         2.2.3 CRITICAL - Connection Lock:
               - Open Kinesis to verify that the stage is working/homed if needed.
               - IMPORTANT: You MUST close the Thorlabs Kinesis software (and any Simulator) completely before running the Python script. If Kinesis is open, it locks the USB port and the Python script will fail to connect.
@@ -40,12 +40,12 @@ Starting the software
             python3 -m venv .venv314
             source .venv314/bin/activate
             python -m pip install -r requirements.txt
-            then e.g. python main.py
+            then e.g. python main_camera.py
         5.1.2 using windows powershell
             py -3.14 -m venv .venv314
             .\.venv314\Scripts\Activate.ps1
             python -m pip install -r requirements.txt
-            then e.g. python main.py
+            then e.g. python main_camera.py
 
 
 

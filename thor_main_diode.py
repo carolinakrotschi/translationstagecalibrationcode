@@ -1,14 +1,14 @@
-#basically identical to side.py except for 2 Photodiods and the Thorlabs stage
+# this code is basically identical with side.py except for "from stage_controller_thor import StageController"
 
 # TABLE OF CONTENTS
 # 1. Basic settings
-# 2. Imports #NEW (obviously)
+# 2. Imports 
 # 3. Physical constants and colors
-# 4. SideApp class (UI)
+# 4. SideApp class (UI) 
 # 5. Monitoring and reset
 # 6. Translation stage control
-# 7. Calibration
-# 8. Diode loop and plotting #NEW (values get devided by reference diode)
+# 7. Calibration 
+# 8. Diode loop and plotting 
 # 9. Cleanup and program start
 
 
@@ -19,8 +19,10 @@
 CALIBRATION_SECONDS = 20.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
 CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
-CALIBRATION_STAGE_SPEED_MM_S = 0.0006
-DEFAULT_FRINGE_AMPLITUDE_V = 0.001
+CALIBRATION_STAGE_SPEED_MM_S = (
+    2 * CALIBRATION_STAGE_DISTANCE_MM
+) / CALIBRATION_STAGE_MOTION_SECONDS
+DEFAULT_FRINGE_AMPLITUDE_V = 0.003
 MIN_VALID_FRINGE_AMPLITUDE_V = 0.001
 MAX_VALID_FRINGE_AMPLITUDE_V = 0.010
 FRINGE_RISE_FRACTION = 0.55
@@ -58,24 +60,21 @@ except ImportError:
     Figure = None
     FigureCanvasTkAgg = None
 
-from diode_handler import (
+from handler_diode import (
     LASER_WAVELENGTH_NM,
     PHOTODIODE_CHANNEL,
-    PHOTODIODE_REF_CHANNEL,
     SAMPLE_INTERVAL_S,
     SingleDiodeHandler,
-    ReferenceDiodeHandler,
-    USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
-from stage_controller_thor import StageController
+from thor_handler_stage import StageController
 
 # -----------------------------------------------------------------------------
 # 3. PHYSICAL CONSTANTS
 # -----------------------------------------------------------------------------
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
-DEFAULT_STAGE_SPEED_MM_S = 0.0006
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
 def compute_quarter_wavelength_step_mm(wavelength_nm):
 
     return (wavelength_nm / 4) / 1_000_000
@@ -105,10 +104,7 @@ class SideApp(ctk.CTk):
         #init method always gets called to create a new instance of the class
         super().__init__()
 
-        if USE_REFERENCE_DIODE:
-            self.title("Reference Photodiode Fringe Monitor")
-        else:
-            self.title("Single Photodiode Fringe Monitor")
+        self.title("Single Photodiode Fringe Monitor")
         self.geometry("900x1000")
 
         ctk.set_appearance_mode("light")
@@ -149,13 +145,12 @@ class SideApp(ctk.CTk):
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
-        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
-        self.fringe_amplitude_voltage = default_amp
+        self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
         self.fringe_rise_threshold_voltage = (
-            default_amp * FRINGE_RISE_FRACTION
+            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_RISE_FRACTION
         )
         self.fringe_rearm_threshold_voltage = (
-            default_amp * FRINGE_REARM_FRACTION
+            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_REARM_FRACTION
         )
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
@@ -168,10 +163,7 @@ class SideApp(ctk.CTk):
             self.laser_wavelength_nm
         )
 
-        if USE_REFERENCE_DIODE:
-            self.diode = ReferenceDiodeHandler()
-        else:
-            self.diode = SingleDiodeHandler()
+        self.diode = SingleDiodeHandler()
 
         #same for the stage
         self.stage = StageController()
@@ -534,22 +526,9 @@ class SideApp(ctk.CTk):
         )
         self.label_ps.pack(pady=0)
 
-        if USE_REFERENCE_DIODE:
-            min_text = "Min Ratio: n/a"
-            max_text = "Max Ratio: n/a"
-            dark_text = "Fringe Rise Threshold Ratio: waiting"
-            bright_text = "Fringe Amplitude Ratio: waiting"
-            norm_text = "Normalized Ratio: 0.0000"
-        else:
-            min_text = "Min Voltage: n/a"
-            max_text = "Max Voltage: n/a"
-            dark_text = "Fringe Rise Threshold: waiting"
-            bright_text = "Fringe Amplitude: waiting"
-            norm_text = "Normalized Voltage: 0.0000"
-
         self.label_calibration_offset = ctk.CTkLabel(
             self.frame,
-            text=dark_text,
+            text="Fringe Rise Threshold: waiting",
             font=("Arial", 11),
             text_color=TEXT_COLOR
         )
@@ -557,7 +536,7 @@ class SideApp(ctk.CTk):
 
         self.label_calibration_scale = ctk.CTkLabel(
             self.frame,
-            text=bright_text,
+            text="Fringe Amplitude: waiting",
             font=("Arial", 11),
             text_color=TEXT_COLOR
         )
@@ -573,7 +552,7 @@ class SideApp(ctk.CTk):
 
         self.label_min_voltage = ctk.CTkLabel(
             self.frame,
-            text=min_text,
+            text="Min Voltage: n/a",
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
@@ -581,48 +560,23 @@ class SideApp(ctk.CTk):
 
         self.label_max_voltage = ctk.CTkLabel(
             self.frame,
-            text=max_text,
+            text="Max Voltage: n/a",
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
         self.label_max_voltage.pack(pady=0)
 
-        if USE_REFERENCE_DIODE:
-            self.label_raw_pint = ctk.CTkLabel(
-                self.frame,
-                text="Pint Raw Voltage: 0.000000 V",
-                font=("Arial", 10),
-                text_color=TEXT_COLOR
-            )
-            self.label_raw_pint.pack(pady=0)
-
-            self.label_raw_ref = ctk.CTkLabel(
-                self.frame,
-                text="Pl Raw Voltage: 0.000000 V",
-                font=("Arial", 10),
-                text_color=TEXT_COLOR
-            )
-            self.label_raw_ref.pack(pady=0)
-
-            self.label_ratio = ctk.CTkLabel(
-                self.frame,
-                text="Ratio Pint/Pl: 0.000000",
-                font=("Arial", 10),
-                text_color=TEXT_COLOR
-            )
-            self.label_ratio.pack(pady=0)
-        else:
-            self.label_raw = ctk.CTkLabel(
-                self.frame,
-                text="Raw Voltage: 0.000000 V",
-                font=("Arial", 10),
-                text_color=TEXT_COLOR
-            )
-            self.label_raw.pack(pady=0)
+        self.label_raw = ctk.CTkLabel(
+            self.frame,
+            text="Raw Voltage: 0.000000 V",
+            font=("Arial", 10),
+            text_color=TEXT_COLOR
+        )
+        self.label_raw.pack(pady=0)
 
         self.label_norm = ctk.CTkLabel(
             self.frame,
-            text=norm_text,
+            text="Normalized Voltage: 0.0000",
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
@@ -699,10 +653,7 @@ class SideApp(ctk.CTk):
         )
         self.label_compare_difference.pack(pady=0)
 
-        if USE_REFERENCE_DIODE:
-            channel_text = f"Channels: Pint={PHOTODIODE_CHANNEL}, Pl={PHOTODIODE_REF_CHANNEL}"
-        else:
-            channel_text = f"Channel: photodiode={PHOTODIODE_CHANNEL}"
+        channel_text = f"Channel: photodiode={PHOTODIODE_CHANNEL}"
         ctk.CTkLabel(
             self.scroll,
             text=channel_text,
@@ -723,7 +674,7 @@ class SideApp(ctk.CTk):
 
         ctk.CTkLabel(
             self.plot_frame,
-            text="Live Pint/Pl Ratio" if USE_REFERENCE_DIODE else "Live Raw Voltage",
+            text="Live Raw Voltage",
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 2))
@@ -768,7 +719,7 @@ class SideApp(ctk.CTk):
             [],
             [],
             color="blue",
-            label="Pint/Pl ratio" if USE_REFERENCE_DIODE else "photodiode raw"
+            label="photodiode raw"
         )[0]
         self.plot_axis.legend(loc="upper right", prop={"size": 8})
         self.plot_figure.subplots_adjust(
@@ -828,10 +779,7 @@ class SideApp(ctk.CTk):
 
         self.restart_values_only()
 
-        if USE_REFERENCE_DIODE:
-            self.diode = ReferenceDiodeHandler()
-        else:
-            self.diode = SingleDiodeHandler()
+        self.diode = SingleDiodeHandler()
         self.is_monitoring = True
         self.calibrating = True
         self.last_error_text = None
@@ -951,12 +899,12 @@ class SideApp(ctk.CTk):
     # 7.8 HANDLE CALIBRATION SAMPLE
     # -----------------------------------------------------------------------------
 
-    def handle_calibration_sample(self, sample_data, elapsed_s, total_s):
+    def handle_calibration_sample(self, raw_voltage, elapsed_s, total_s):
 
         self.after(
             0,
-            lambda s=sample_data, e=elapsed_s, t=total_s:
-            self.update_calibration_progress(s, e, t)
+            lambda v=raw_voltage, e=elapsed_s, t=total_s:
+            self.update_calibration_progress(v, e, t)
         )
 
     # -----------------------------------------------------------------------------
@@ -965,41 +913,22 @@ class SideApp(ctk.CTk):
 
     def update_calibration_progress(
         self,
-        sample_data,
+        raw_voltage,
         elapsed_s,
         total_s
     ):
 
-        if USE_REFERENCE_DIODE:
-            raw_int, raw_ref = sample_data
-            if abs(raw_ref) < 1e-6:
-                denom = 1e-6 if raw_ref >= 0 else -1e-6
-            else:
-                denom = raw_ref
-            val = raw_int / denom
-            self.calibration_raw_samples.append(val)
-            self.append_raw_history(val)
-
-            self.label_raw_pint.configure(
-                text=f"Pint Raw Voltage: {raw_int:+.6f} V"
-            )
-            self.label_raw_ref.configure(
-                text=f"Pl Raw Voltage: {raw_ref:+.6f} V"
-            )
-            self.label_ratio.configure(
-                text=f"Ratio Pint/Pl: {val:.6f}"
-            )
-        else:
-            val = sample_data
-            self.calibration_raw_samples.append(val)
-            self.append_raw_history(val)
-
-            self.label_raw.configure(
-                text=f"Raw Voltage: {val:+.6f} V"
-            )
-
+        self.calibration_raw_samples.append(
+            raw_voltage
+        )
+        self.append_raw_history(
+            raw_voltage
+        )
         self.update_plot()
 
+        self.label_raw.configure(
+            text=f"Raw Voltage: {raw_voltage:+.6f} V"
+        )
         self.label_calibration.configure(
             text=f"Calibration: {elapsed_s:.1f}/{total_s:.1f}s"
         )
@@ -1020,15 +949,11 @@ class SideApp(ctk.CTk):
                 self.calibration_raw_samples
             )
         )
+
         if fringe_min_voltage is None or fringe_max_voltage is None:
-            if USE_REFERENCE_DIODE:
-                fringe_min_voltage = calibration.min_ratio
-                fringe_max_voltage = calibration.max_ratio
-                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.002)
-            else:
-                fringe_min_voltage = calibration.min_voltage
-                fringe_max_voltage = calibration.max_voltage
-                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.0015)
+            fringe_min_voltage = calibration.min_voltage
+            fringe_max_voltage = calibration.max_voltage
+            fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
 
         self.apply_calibration_extrema(
             calibration,
@@ -1049,64 +974,34 @@ class SideApp(ctk.CTk):
             - value_range * 0.40
         )
 
-        if USE_REFERENCE_DIODE:
-            self.label_calibration.configure(
-                text=(
-                    f"Fringe calibration min/max: "
-                    f"{fringe_min_voltage:.6f}/"
-                    f"{fringe_max_voltage:.6f} "
-                    f"({extrema_count} extrema, "
-                    f"amp {self.fringe_amplitude_voltage:.6f})"
-                ),
-                text_color=GREEN_COLOR
+        self.label_calibration.configure(
+            text=(
+                f"Fringe calibration min/max: "
+                f"{fringe_min_voltage:+.6f}/"
+                f"{fringe_max_voltage:+.6f} V "
+                f"({extrema_count} extrema, "
+                f"amp {self.fringe_amplitude_voltage:.6f} V)"
+            ),
+            text_color=GREEN_COLOR
+        )
+        self.label_calibration_offset.configure(
+            text=(
+                f"Fringe Rise Threshold: "
+                f"{self.fringe_rise_threshold_voltage:.6f} V"
             )
-            self.label_calibration_offset.configure(
-                text=(
-                    f"Fringe Rise Threshold Ratio: "
-                    f"{self.fringe_rise_threshold_voltage:.6f}"
-                )
+        )
+        self.label_calibration_scale.configure(
+            text=(
+                f"Fringe Amplitude: "
+                f"{self.fringe_amplitude_voltage:.6f} V"
             )
-            self.label_calibration_scale.configure(
-                text=(
-                    f"Fringe Amplitude Ratio: "
-                    f"{self.fringe_amplitude_voltage:.6f}"
-                )
-            )
-            self.label_min_voltage.configure(
-                text=f"Min Ratio: {fringe_min_voltage:.6f}"
-            )
-            self.label_max_voltage.configure(
-                text=f"Max Ratio: {fringe_max_voltage:.6f}"
-            )
-        else:
-            self.label_calibration.configure(
-                text=(
-                    f"Fringe calibration min/max: "
-                    f"{fringe_min_voltage:+.6f}/"
-                    f"{fringe_max_voltage:+.6f} V "
-                    f"({extrema_count} extrema, "
-                    f"amp {self.fringe_amplitude_voltage:.6f} V)"
-                ),
-                text_color=GREEN_COLOR
-            )
-            self.label_calibration_offset.configure(
-                text=(
-                    f"Fringe Rise Threshold: "
-                    f"{self.fringe_rise_threshold_voltage:.6f} V"
-                )
-            )
-            self.label_calibration_scale.configure(
-                text=(
-                    f"Fringe Amplitude: "
-                    f"{self.fringe_amplitude_voltage:.6f} V"
-                )
-            )
-            self.label_min_voltage.configure(
-                text=f"Min Voltage: {fringe_min_voltage:+.6f} V"
-            )
-            self.label_max_voltage.configure(
-                text=f"Max Voltage: {fringe_max_voltage:+.6f} V"
-            )
+        )
+        self.label_min_voltage.configure(
+            text=f"Min Voltage: {fringe_min_voltage:+.6f} V"
+        )
+        self.label_max_voltage.configure(
+            text=f"Max Voltage: {fringe_max_voltage:+.6f} V"
+        )
 
         if not self.stage_connected or not self.stage.is_moving:
             self.set_buttons_enabled(True)
@@ -1246,25 +1141,10 @@ class SideApp(ctk.CTk):
                 current_value - previous_value
             )
 
-        min_valid = MIN_VALID_FRINGE_AMPLITUDE_V
-        max_valid = 0.8 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
-        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
-
-        for index in range(1, len(compressed_extrema)):
-            previous_kind, previous_value = compressed_extrema[index - 1]
-            current_kind, current_value = compressed_extrema[index]
-
-            if previous_kind == current_kind:
-                continue
-
-            amplitude = abs(
-                current_value - previous_value
-            )
-
             if (
-                min_valid
+                MIN_VALID_FRINGE_AMPLITUDE_V
                 <= amplitude
-                <= max_valid
+                <= MAX_VALID_FRINGE_AMPLITUDE_V
             ):
                 amplitudes.append(amplitude)
 
@@ -1277,13 +1157,13 @@ class SideApp(ctk.CTk):
             )
 
         if (
-            min_valid
+            MIN_VALID_FRINGE_AMPLITUDE_V
             <= fallback_amplitude
-            <= max_valid
+            <= MAX_VALID_FRINGE_AMPLITUDE_V
         ):
             return fallback_amplitude
 
-        return default_amp
+        return DEFAULT_FRINGE_AMPLITUDE_V
 
     def median_value(self, values):
 
@@ -1303,16 +1183,12 @@ class SideApp(ctk.CTk):
 
     def configure_fringe_detection(self, amplitude_voltage):
 
-        min_valid = MIN_VALID_FRINGE_AMPLITUDE_V
-        max_valid = 0.8 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
-        default_amp = DEFAULT_FRINGE_AMPLITUDE_V
-
         if (
             amplitude_voltage is None
-            or amplitude_voltage < min_valid
-            or amplitude_voltage > max_valid
+            or amplitude_voltage < MIN_VALID_FRINGE_AMPLITUDE_V
+            or amplitude_voltage > MAX_VALID_FRINGE_AMPLITUDE_V
         ):
-            amplitude_voltage = default_amp
+            amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
 
         self.fringe_amplitude_voltage = amplitude_voltage
         self.fringe_rise_threshold_voltage = (
@@ -1332,40 +1208,29 @@ class SideApp(ctk.CTk):
     def apply_calibration_extrema(
         self,
         calibration,
-        min_val,
-        max_val
+        min_voltage,
+        max_voltage
     ):
 
-        offset_val = (
-            min_val + max_val
+        offset_voltage = (
+            min_voltage + max_voltage
         ) / 2
-        scale_val = (
-            max_val - min_val
+        scale_voltage = (
+            max_voltage - min_voltage
         ) / 2
 
-        if scale_val <= 1e-12:
-            scale_val = 1.0
+        if scale_voltage <= 1e-12:
+            scale_voltage = 1.0
 
-        if USE_REFERENCE_DIODE:
-            calibration.min_ratio = min_val
-            calibration.max_ratio = max_val
-            calibration.offset_ratio = offset_val
-            calibration.scale_ratio = scale_val
+        calibration.min_voltage = min_voltage
+        calibration.max_voltage = max_voltage
+        calibration.offset_voltage = offset_voltage
+        calibration.scale_voltage = scale_voltage
 
-            self.diode.counter.min_ratio = min_val
-            self.diode.counter.max_ratio = max_val
-            self.diode.counter.offset_ratio = offset_val
-            self.diode.counter.scale_ratio = scale_val
-        else:
-            calibration.min_voltage = min_val
-            calibration.max_voltage = max_val
-            calibration.offset_voltage = offset_val
-            calibration.scale_voltage = scale_val
-
-            self.diode.counter.min_voltage = min_val
-            self.diode.counter.max_voltage = max_val
-            self.diode.counter.offset_voltage = offset_val
-            self.diode.counter.scale_voltage = scale_val
+        self.diode.counter.min_voltage = min_voltage
+        self.diode.counter.max_voltage = max_voltage
+        self.diode.counter.offset_voltage = offset_voltage
+        self.diode.counter.scale_voltage = scale_voltage
 
     # -----------------------------------------------------------------------------
     # 8.3 SHOW CURRENT VOLTAGE AND DISTANCE
@@ -1374,16 +1239,14 @@ class SideApp(ctk.CTk):
     def update_sample_display(self, sample):
 
         self.latest_sample = sample
+        self.latest_voltage = sample.raw_voltage
+        fringe_counted = self.update_accumulated_fringes(
+            sample.raw_voltage
+        )
 
-        if USE_REFERENCE_DIODE:
-            val = sample.ratio
-        else:
-            val = sample.raw_voltage
-
-        self.latest_voltage = val
-        fringe_counted = self.update_accumulated_fringes(val)
-
-        self.append_raw_history(val)
+        self.append_raw_history(
+            sample.raw_voltage
+        )
         self.update_plot()
 
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
@@ -1399,27 +1262,12 @@ class SideApp(ctk.CTk):
         self.label_sample_count.configure(
             text=f"Accumulated Fringes Count: {self.accumulated_fringes}"
         )
-
-        if USE_REFERENCE_DIODE:
-            self.label_raw_pint.configure(
-                text=f"Pint Raw Voltage: {sample.raw_int:+.6f} V"
-            )
-            self.label_raw_ref.configure(
-                text=f"Pl Raw Voltage: {sample.raw_ref:+.6f} V"
-            )
-            self.label_ratio.configure(
-                text=f"Ratio Pint/Pl: {sample.ratio:.6f}"
-            )
-            self.label_norm.configure(
-                text=f"Normalized Ratio: {sample.normalized_ratio:+.4f}"
-            )
-        else:
-            self.label_raw.configure(
-                text=f"Raw Voltage: {sample.raw_voltage:+.6f} V"
-            )
-            self.label_norm.configure(
-                text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
-            )
+        self.label_raw.configure(
+            text=f"Raw Voltage: {sample.raw_voltage:+.6f} V"
+        )
+        self.label_norm.configure(
+            text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
+        )
 
         if fringe_counted:
             self.label_sample_count.configure(
@@ -1632,58 +1480,28 @@ class SideApp(ctk.CTk):
         self.label_ps.configure(
             text="Time Delay: 0.0000 ps"
         )
-        if USE_REFERENCE_DIODE:
-            self.label_calibration_offset.configure(
-                text="Fringe Rise Threshold Ratio: waiting"
-            )
-            self.label_calibration_scale.configure(
-                text="Fringe Amplitude Ratio: waiting"
-            )
-            self.label_sample_count.configure(
-                text="Accumulated Fringes Count: 0",
-                text_color=TEXT_COLOR
-            )
-            self.label_min_voltage.configure(
-                text="Min Ratio: n/a"
-            )
-            self.label_max_voltage.configure(
-                text="Max Ratio: n/a"
-            )
-            self.label_raw_pint.configure(
-                text="Pint Raw Voltage: 0.000000 V"
-            )
-            self.label_raw_ref.configure(
-                text="Pl Raw Voltage: 0.000000 V"
-            )
-            self.label_ratio.configure(
-                text="Ratio Pint/Pl: 0.000000"
-            )
-            self.label_norm.configure(
-                text="Normalized Ratio: 0.0000"
-            )
-        else:
-            self.label_calibration_offset.configure(
-                text="Fringe Rise Threshold: waiting"
-            )
-            self.label_calibration_scale.configure(
-                text="Fringe Amplitude: waiting"
-            )
-            self.label_sample_count.configure(
-                text="Accumulated Fringes Count: 0",
-                text_color=TEXT_COLOR
-            )
-            self.label_min_voltage.configure(
-                text="Min Voltage: n/a"
-            )
-            self.label_max_voltage.configure(
-                text="Max Voltage: n/a"
-            )
-            self.label_raw.configure(
-                text="Raw Voltage: 0.000000 V"
-            )
-            self.label_norm.configure(
-                text="Normalized Voltage: 0.0000"
-            )
+        self.label_calibration_offset.configure(
+            text="Fringe Rise Threshold: waiting"
+        )
+        self.label_calibration_scale.configure(
+            text="Fringe Amplitude: waiting"
+        )
+        self.label_sample_count.configure(
+            text="Accumulated Fringes Count: 0",
+            text_color=TEXT_COLOR
+        )
+        self.label_min_voltage.configure(
+            text="Min Voltage: n/a"
+        )
+        self.label_max_voltage.configure(
+            text="Max Voltage: n/a"
+        )
+        self.label_raw.configure(
+            text="Raw Voltage: 0.000000 V"
+        )
+        self.label_norm.configure(
+            text="Normalized Voltage: 0.0000"
+        )
         self.label_calibration.configure(
             text="Calibration: waiting",
             text_color=TEXT_COLOR
@@ -2695,7 +2513,6 @@ class SideApp(ctk.CTk):
     def calibration_stage_motion(self):
 
         previous_velocity = None
-        accumulated_movement_mm = 0.0
 
         try:
             if not self.stage_connected: # refuse movement commands when stage is not connected
@@ -2735,6 +2552,8 @@ class SideApp(ctk.CTk):
                     text_color=ORANGE_COLOR
                 )
             )
+
+            accumulated_movement_mm = 0.0
 
             while self.is_monitoring and self.calibrating:
                 for target in (forward_target, back_target):

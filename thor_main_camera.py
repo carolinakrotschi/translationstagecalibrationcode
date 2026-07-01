@@ -1,4 +1,4 @@
-#works, identical to main.py except for "from stage_controller_thor import StageController"
+#works, identical to main_camera.py except for "from thor_handler_stage import StageController"
 
 # TABLE OF CONTENTS
 # 1. "Backup plan"/Basic Setting

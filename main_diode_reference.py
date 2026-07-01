@@ -1,14 +1,14 @@
-# this code is basically identical with side.py except for "from stage_controller_thor import StageController"
+#basically identical to side.py except for 2 photodiodes
 
 # TABLE OF CONTENTS
 # 1. Basic settings
-# 2. Imports 
+# 2. Imports #NEW (obviously)
 # 3. Physical constants and colors
-# 4. SideApp class (UI) 
+# 4. SideApp class (UI)
 # 5. Monitoring and reset
 # 6. Translation stage control
-# 7. Calibration 
-# 8. Diode loop and plotting 
+# 7. Calibration
+# 8. Diode loop and plotting #NEW (values get devided by reference diode)
 # 9. Cleanup and program start
 
 
@@ -16,24 +16,13 @@
 # 1. BASIC SETTINGS
 # -----------------------------------------------------------------------------
 
-CALIBRATION_SECONDS = 20.0
-CALIBRATION_STAGE_DISTANCE_MM = 0.01
-CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
-CALIBRATION_STAGE_SPEED_MM_S = (
-    2 * CALIBRATION_STAGE_DISTANCE_MM
-) / CALIBRATION_STAGE_MOTION_SECONDS
-DEFAULT_FRINGE_AMPLITUDE_V = 0.003
-MIN_VALID_FRINGE_AMPLITUDE_V = 0.001
-MAX_VALID_FRINGE_AMPLITUDE_V = 0.010
-FRINGE_RISE_FRACTION = 0.55
-FRINGE_REARM_FRACTION = 0.20
 RAW_HISTORY_LENGTH = 300
-SMOOTHING_WINDOW_LENGTH = 1
 STEP_PAUSE_S = 0.05
-REQUIRED_DARK_FRAMES = 1
-REQUIRED_BRIGHT_FRAMES = 1
-FRINGE_COOLDOWN = SAMPLE_INTERVAL_S
-STAGE_STATUS_POLL_MS = 100
+#the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
+REQUIRED_DARK_FRAMES = 3
+REQUIRED_BRIGHT_FRAMES = 3
+#after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
+FRINGE_COOLDOWN = 0.08
 
 MODE = "continuous"
 
@@ -60,14 +49,18 @@ except ImportError:
     Figure = None
     FigureCanvasTkAgg = None
 
-from diode_handler import (
+from handler_diode import (
+    CALIBRATION_SECONDS,
     LASER_WAVELENGTH_NM,
     PHOTODIODE_CHANNEL,
+    PHOTODIODE_REF_CHANNEL,
     SAMPLE_INTERVAL_S,
     SingleDiodeHandler,
+    ReferenceDiodeHandler,
+    USE_REFERENCE_DIODE,
     compute_fringe_distance_mm
 )
-from stage_controller_thor import StageController
+from handler_stage import StageController
 
 # -----------------------------------------------------------------------------
 # 3. PHYSICAL CONSTANTS
@@ -134,7 +127,6 @@ class SideApp(ctk.CTk):
         self.last_error_text = None
 
         self.raw_voltage_history = []
-        self.calibration_raw_samples = []
         self.smoothed_voltage_history = []
         self.accumulated_fringes = 0
         #a bright state only counts after darkness
@@ -145,15 +137,13 @@ class SideApp(ctk.CTk):
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
-        self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
-        self.fringe_rise_threshold_voltage = (
-            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_RISE_FRACTION
-        )
-        self.fringe_rearm_threshold_voltage = (
-            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_REARM_FRACTION
-        )
-        self.fringe_trough_voltage = None
-        self.fringe_peak_voltage = None
+
+        self.fringe_detect_state = "unknown"
+        self.fringe_current_max = 0.0
+        self.fringe_current_min = 0.0
+        self.half_fringe_count = 0
+        self.hysteresis = 0.05
+        self.last_calibration_ui_update = 0.0
 
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
         self.fringe_distance_mm = compute_fringe_distance_mm(
@@ -163,7 +153,10 @@ class SideApp(ctk.CTk):
             self.laser_wavelength_nm
         )
 
-        self.diode = SingleDiodeHandler()
+        if USE_REFERENCE_DIODE:
+            self.diode = ReferenceDiodeHandler()
+        else:
+            self.diode = SingleDiodeHandler()
 
         #same for the stage
         self.stage = StageController()
@@ -175,9 +168,6 @@ class SideApp(ctk.CTk):
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
-        self.stage_target_position = None
-        self.stage_remaining_to_drive = 0.0
-        self.stage_remaining_known = True
         self.last_stage_speed_time = None
         self.last_stage_speed_position = None
 
@@ -198,11 +188,6 @@ class SideApp(ctk.CTk):
             self.btn_right,
             self.btn_max
         ]
-
-        self.after(
-            STAGE_STATUS_POLL_MS,
-            self.poll_stage_status
-        )
 
     # -----------------------------------------------------------------------------
     # 4.1.2 UI BUILD
@@ -285,7 +270,7 @@ class SideApp(ctk.CTk):
 
         ctk.CTkLabel(
             self.stage_frame,
-            text="Schrittweite / Step size:",
+            text="Step size:",
             font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 0))
@@ -303,7 +288,7 @@ class SideApp(ctk.CTk):
 
         ctk.CTkLabel(
             self.stage_frame,
-            text="Geschwindigkeit / Velocity:",
+            text="Velocity:",
             font=("Arial", 11, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 0))
@@ -315,10 +300,9 @@ class SideApp(ctk.CTk):
         )
         self.speed_entry.pack(pady=1)
 
-        stage_velocity = DEFAULT_STAGE_SPEED_MM_S
+        stage_velocity = None
         if self.stage_connected:
-            if not self.stage.set_velocity(stage_velocity):
-                stage_velocity = self.stage.set_velocity()
+            stage_velocity = self.stage.set_velocity()
 
         if stage_velocity is None:
             stage_velocity = DEFAULT_STAGE_SPEED_MM_S
@@ -363,7 +347,7 @@ class SideApp(ctk.CTk):
             width=250
         )
         self.target_entry.pack(pady=1)
-        self.target_entry.insert(0, "0.01")
+        self.target_entry.insert(0, "0.0000")
 
         self.target_button_frame = ctk.CTkFrame(
             self.stage_frame,
@@ -526,9 +510,24 @@ class SideApp(ctk.CTk):
         )
         self.label_ps.pack(pady=0)
 
+        if USE_REFERENCE_DIODE:
+            min_text = "Min Ratio: n/a"
+            max_text = "Max Ratio: n/a"
+            dark_text = "Dark Threshold Ratio: waiting"
+            bright_text = "Bright Threshold Ratio: waiting"
+            hyst_text = "Hysteresis Ratio: waiting"
+            norm_text = "Normalized Ratio: 0.0000"
+        else:
+            min_text = "Min Voltage: n/a"
+            max_text = "Max Voltage: n/a"
+            dark_text = "Dark Threshold: waiting"
+            bright_text = "Bright Threshold: waiting"
+            hyst_text = "Hysteresis: waiting"
+            norm_text = "Normalized Voltage: 0.0000"
+
         self.label_calibration_offset = ctk.CTkLabel(
             self.frame,
-            text="Fringe Rise Threshold: waiting",
+            text=dark_text,
             font=("Arial", 11),
             text_color=TEXT_COLOR
         )
@@ -536,11 +535,19 @@ class SideApp(ctk.CTk):
 
         self.label_calibration_scale = ctk.CTkLabel(
             self.frame,
-            text="Fringe Amplitude: waiting",
+            text=bright_text,
             font=("Arial", 11),
             text_color=TEXT_COLOR
         )
         self.label_calibration_scale.pack(pady=0)
+
+        self.label_hysteresis = ctk.CTkLabel(
+            self.frame,
+            text=hyst_text,
+            font=("Arial", 11),
+            text_color=TEXT_COLOR
+        )
+        self.label_hysteresis.pack(pady=0)
 
         self.label_sample_count = ctk.CTkLabel(
             self.frame,
@@ -550,33 +557,51 @@ class SideApp(ctk.CTk):
         )
         self.label_sample_count.pack(pady=0)
 
-        self.label_min_voltage = ctk.CTkLabel(
+        self.label_min_ratio = ctk.CTkLabel(
             self.frame,
-            text="Min Voltage: n/a",
+            text=min_text,
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
-        self.label_min_voltage.pack(pady=0)
+        self.label_min_ratio.pack(pady=0)
 
-        self.label_max_voltage = ctk.CTkLabel(
+        self.label_max_ratio = ctk.CTkLabel(
             self.frame,
-            text="Max Voltage: n/a",
+            text=max_text,
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
-        self.label_max_voltage.pack(pady=0)
+        self.label_max_ratio.pack(pady=0)
 
-        self.label_raw = ctk.CTkLabel(
+        self.label_raw_pint = ctk.CTkLabel(
             self.frame,
-            text="Raw Voltage: 0.000000 V",
+            text="Pint Raw Voltage: 0.000000 V",
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
-        self.label_raw.pack(pady=0)
+        self.label_raw_pint.pack(pady=0)
+
+        self.label_raw_ref = ctk.CTkLabel(
+            self.frame,
+            text="Pl Raw Voltage: 0.000000 V",
+            font=("Arial", 10),
+            text_color=TEXT_COLOR
+        )
+        if USE_REFERENCE_DIODE:
+            self.label_raw_ref.pack(pady=0)
+
+        self.label_ratio = ctk.CTkLabel(
+            self.frame,
+            text="Ratio Pint/Pl: 0.000000",
+            font=("Arial", 10),
+            text_color=TEXT_COLOR
+        )
+        if USE_REFERENCE_DIODE:
+            self.label_ratio.pack(pady=0)
 
         self.label_norm = ctk.CTkLabel(
             self.frame,
-            text="Normalized Voltage: 0.0000",
+            text=norm_text,
             font=("Arial", 10),
             text_color=TEXT_COLOR
         )
@@ -607,35 +632,13 @@ class SideApp(ctk.CTk):
             text_color=TEXT_COLOR
         ).pack(pady=0)
 
-        self.compare_driven_frame = ctk.CTkFrame(
-            self.compare_frame,
-            fg_color="transparent"
-        )
-        self.compare_driven_frame.pack(pady=0)
-
         self.label_compare_driven = ctk.CTkLabel(
-            self.compare_driven_frame,
+            self.compare_frame,
             text="Driven: 0.000000 mm",
             font=("Arial", 11),
             text_color=TEXT_COLOR
         )
-        self.label_compare_driven.grid(
-            row=0,
-            column=0,
-            padx=(0, 14)
-        )
-
-        self.label_still_to_drive = ctk.CTkLabel(
-            self.compare_driven_frame,
-            text="Still to drive: 0.000000 mm",
-            font=("Arial", 11),
-            text_color=TEXT_COLOR
-        )
-        self.label_still_to_drive.grid(
-            row=0,
-            column=1,
-            padx=(14, 0)
-        )
+        self.label_compare_driven.pack(pady=0)
 
         self.label_compare_calculated = ctk.CTkLabel(
             self.compare_frame,
@@ -653,7 +656,10 @@ class SideApp(ctk.CTk):
         )
         self.label_compare_difference.pack(pady=0)
 
-        channel_text = f"Channel: photodiode={PHOTODIODE_CHANNEL}"
+        if USE_REFERENCE_DIODE:
+            channel_text = f"Channels: Pint={PHOTODIODE_CHANNEL}, Pl={PHOTODIODE_REF_CHANNEL}"
+        else:
+            channel_text = f"Channel: photodiode={PHOTODIODE_CHANNEL}"
         ctk.CTkLabel(
             self.scroll,
             text=channel_text,
@@ -666,15 +672,16 @@ class SideApp(ctk.CTk):
             fg_color="#EEEEEE"
         )
         self.plot_frame.pack(
-            fill="x",
-            expand=False,
+            fill="both",
+            expand=True,
             padx=5,
             pady=(4, 10)
         )
 
+        plot_title_text = "Live Ratio Pint/Pl" if USE_REFERENCE_DIODE else "Live Raw Voltage"
         ctk.CTkLabel(
             self.plot_frame,
-            text="Live Raw Voltage",
+            text=plot_title_text,
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(5, 2))
@@ -701,14 +708,20 @@ class SideApp(ctk.CTk):
             return
 
         self.plot_figure = Figure(
-            figsize=(8, 2),
+            figsize=(8, 3),
             dpi=100
         )
         self.plot_axis = self.plot_figure.add_subplot(111)
-        self.plot_axis.set_title("Raw diode voltage", fontsize=9)
-        self.plot_axis.set_xlabel("Samples", fontsize=8)
-        self.plot_axis.set_ylabel("Voltage", fontsize=8)
-        self.plot_axis.tick_params(labelsize=8)
+        if USE_REFERENCE_DIODE:
+            self.plot_axis.set_title("Ratio Pint/Pl")
+            self.plot_axis.set_ylabel("Ratio")
+            line_label = "Pint/Pl ratio"
+        else:
+            self.plot_axis.set_title("Raw diode voltage")
+            self.plot_axis.set_ylabel("Voltage")
+            line_label = "photodiode raw"
+
+        self.plot_axis.set_xlabel("Samples")
         self.plot_axis.grid(
             True,
             linestyle=":",
@@ -719,26 +732,18 @@ class SideApp(ctk.CTk):
             [],
             [],
             color="blue",
-            label="photodiode raw"
+            label=line_label
         )[0]
-        self.plot_axis.legend(loc="upper right", prop={"size": 8})
-        self.plot_figure.subplots_adjust(
-            left=0.08,
-            right=0.98,
-            top=0.85,
-            bottom=0.22
-        )
+        self.plot_axis.legend(loc="upper right")
 
         self.plot_canvas = FigureCanvasTkAgg(
             self.plot_figure,
             master=self.plot_frame
         )
         self.plot_canvas.draw()
-        plot_widget = self.plot_canvas.get_tk_widget()
-        plot_widget.configure(height=220)
-        plot_widget.pack(
-            fill="x",
-            expand=False,
+        self.plot_canvas.get_tk_widget().pack(
+            fill="both",
+            expand=True,
             padx=8,
             pady=8
         )
@@ -779,7 +784,10 @@ class SideApp(ctk.CTk):
 
         self.restart_values_only()
 
-        self.diode = SingleDiodeHandler()
+        if USE_REFERENCE_DIODE:
+            self.diode = ReferenceDiodeHandler()
+        else:
+            self.diode = SingleDiodeHandler()
         self.is_monitoring = True
         self.calibrating = True
         self.last_error_text = None
@@ -853,7 +861,6 @@ class SideApp(ctk.CTk):
                 return
 
             self.calibrating = False
-            self.stop_calibration_stage_motion()
 
             if calibration is not None:
                 self.after(
@@ -862,14 +869,26 @@ class SideApp(ctk.CTk):
                     self.finish_calibration_display(c)
                 )
 
+            sample_count = 0
             while self.is_monitoring:
                 sample = self.diode.read()
 
-                self.after(
-                    0,
-                    lambda s=sample:
-                    self.update_sample_display(s)
-                )
+                if USE_REFERENCE_DIODE:
+                    self.latest_voltage = sample.ratio
+                    fringe_counted = self.update_accumulated_fringes(sample.ratio)
+                    self.append_raw_history(sample.ratio)
+                else:
+                    self.latest_voltage = sample.raw_voltage
+                    fringe_counted = self.update_accumulated_fringes(sample.raw_voltage)
+                    self.append_raw_history(sample.raw_voltage)
+
+                sample_count += 1
+                if sample_count % 10 == 0 or fringe_counted:
+                    self.after(
+                        0,
+                        lambda s=sample, fc=fringe_counted:
+                        self.update_ui_display(s, fc)
+                    )
 
                 time.sleep(SAMPLE_INTERVAL_S)
 
@@ -899,36 +918,63 @@ class SideApp(ctk.CTk):
     # 7.8 HANDLE CALIBRATION SAMPLE
     # -----------------------------------------------------------------------------
 
-    def handle_calibration_sample(self, raw_voltage, elapsed_s, total_s):
+    def handle_calibration_sample(self, sample_data, elapsed_s, total_s):
 
-        self.after(
-            0,
-            lambda v=raw_voltage, e=elapsed_s, t=total_s:
-            self.update_calibration_progress(v, e, t)
+        if USE_REFERENCE_DIODE:
+            raw_int, raw_ref = sample_data
+            if abs(raw_ref) < 1e-6:
+                denom = 1e-6 if raw_ref >= 0 else -1e-6
+            else:
+                denom = raw_ref
+            val_to_plot = raw_int / denom
+        else:
+            val_to_plot = sample_data
+
+        self.append_raw_history(
+            val_to_plot
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.8.1 UPDATE CALIBRATION PROGRESS
-    # -----------------------------------------------------------------------------
+        now = time.time()
+        if now - self.last_calibration_ui_update > 0.05:
+            self.last_calibration_ui_update = now
+            self.after(
+                0,
+                lambda s=sample_data, e=elapsed_s, t=total_s:
+                self.update_calibration_progress_ui(s, e, t)
+            )
 
-    def update_calibration_progress(
+    def update_calibration_progress_ui(
         self,
-        raw_voltage,
+        sample_data,
         elapsed_s,
         total_s
     ):
 
-        self.calibration_raw_samples.append(
-            raw_voltage
-        )
-        self.append_raw_history(
-            raw_voltage
-        )
+        if USE_REFERENCE_DIODE:
+            raw_int, raw_ref = sample_data
+            if abs(raw_ref) < 1e-6:
+                denom = 1e-6 if raw_ref >= 0 else -1e-6
+            else:
+                denom = raw_ref
+            val = raw_int / denom
+
+            self.label_raw_pint.configure(
+                text=f"Pint Raw Voltage: {raw_int:+.6f} V"
+            )
+            self.label_raw_ref.configure(
+                text=f"Pl Raw Voltage: {raw_ref:+.6f} V"
+            )
+            self.label_ratio.configure(
+                text=f"Ratio Pint/Pl: {val:.6f}"
+            )
+        else:
+            val = sample_data
+            self.label_raw_pint.configure(
+                text=f"Pint Raw Voltage: {val:+.6f} V"
+            )
+
         self.update_plot()
 
-        self.label_raw.configure(
-            text=f"Raw Voltage: {raw_voltage:+.6f} V"
-        )
         self.label_calibration.configure(
             text=f"Calibration: {elapsed_s:.1f}/{total_s:.1f}s"
         )
@@ -939,314 +985,101 @@ class SideApp(ctk.CTk):
 
     def finish_calibration_display(self, calibration):
 
-        (
-            fringe_min_voltage,
-            fringe_max_voltage,
-            extrema_count,
-            fringe_amplitude_voltage
-        ) = (
-            self.find_calibration_fringe_extrema(
-                self.calibration_raw_samples
+        if USE_REFERENCE_DIODE:
+            min_val = calibration.min_ratio
+            max_val = calibration.max_ratio
+            value_range = max_val - min_val
+            self.dark_threshold = min_val + value_range * 0.125
+            self.bright_threshold = max_val - value_range * 0.40
+            calibrated_amplitude = value_range / 2
+            self.hysteresis = max(0.5 * calibrated_amplitude, 0.005)
+
+            self.label_calibration.configure(
+                text=(
+                    f"Calibration min/max: "
+                    f"{min_val:.6f}/"
+                    f"{max_val:.6f}"
+                ),
+                text_color=GREEN_COLOR
             )
-        )
-
-        if fringe_min_voltage is None or fringe_max_voltage is None:
-            fringe_min_voltage = calibration.min_voltage
-            fringe_max_voltage = calibration.max_voltage
-            fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
-
-        self.apply_calibration_extrema(
-            calibration,
-            fringe_min_voltage,
-            fringe_max_voltage
-        )
-        self.configure_fringe_detection(
-            fringe_amplitude_voltage
-        )
-
-        value_range = fringe_max_voltage - fringe_min_voltage
-        self.dark_threshold = (
-            fringe_min_voltage
-            + value_range * 0.125
-        )
-        self.bright_threshold = (
-            fringe_max_voltage
-            - value_range * 0.40
-        )
-
-        self.label_calibration.configure(
-            text=(
-                f"Fringe calibration min/max: "
-                f"{fringe_min_voltage:+.6f}/"
-                f"{fringe_max_voltage:+.6f} V "
-                f"({extrema_count} extrema, "
-                f"amp {self.fringe_amplitude_voltage:.6f} V)"
-            ),
-            text_color=GREEN_COLOR
-        )
-        self.label_calibration_offset.configure(
-            text=(
-                f"Fringe Rise Threshold: "
-                f"{self.fringe_rise_threshold_voltage:.6f} V"
+            self.label_calibration_offset.configure(
+                text=f"Dark Threshold Ratio: {self.dark_threshold:.6f}"
             )
-        )
-        self.label_calibration_scale.configure(
-            text=(
-                f"Fringe Amplitude: "
-                f"{self.fringe_amplitude_voltage:.6f} V"
+            self.label_calibration_scale.configure(
+                text=f"Bright Threshold Ratio: {self.bright_threshold:.6f}"
             )
-        )
-        self.label_min_voltage.configure(
-            text=f"Min Voltage: {fringe_min_voltage:+.6f} V"
-        )
-        self.label_max_voltage.configure(
-            text=f"Max Voltage: {fringe_max_voltage:+.6f} V"
-        )
+            self.label_hysteresis.configure(
+                text=f"Hysteresis Ratio: {self.hysteresis:.6f}"
+            )
+            self.label_min_ratio.configure(
+                text=f"Min Ratio: {min_val:.6f}"
+            )
+            self.label_max_ratio.configure(
+                text=f"Max Ratio: {max_val:.6f}"
+            )
+        else:
+            min_val = calibration.min_voltage
+            max_val = calibration.max_voltage
+            value_range = max_val - min_val
+            self.dark_threshold = min_val + value_range * 0.125
+            self.bright_threshold = max_val - value_range * 0.40
+            calibrated_amplitude = value_range / 2
+            self.hysteresis = max(0.5 * calibrated_amplitude, 0.005)
 
-        if not self.stage_connected or not self.stage.is_moving:
-            self.set_buttons_enabled(True)
+            self.label_calibration.configure(
+                text=(
+                    f"Calibration min/max: "
+                    f"{min_val:+.6f}/"
+                    f"{max_val:+.6f} V"
+                ),
+                text_color=GREEN_COLOR
+            )
+            self.label_calibration_offset.configure(
+                text=f"Dark Threshold: {self.dark_threshold:+.6f} V"
+            )
+            self.label_calibration_scale.configure(
+                text=f"Bright Threshold: {self.bright_threshold:+.6f} V"
+            )
+            self.label_hysteresis.configure(
+                text=f"Hysteresis: {self.hysteresis:.6f}"
+            )
+            self.label_min_ratio.configure(
+                text=f"Min Voltage: {min_val:+.6f} V"
+            )
+            self.label_max_ratio.configure(
+                text=f"Max Voltage: {max_val:+.6f} V"
+            )
 
         self.status.configure(
             text="Status: monitoring running",
             text_color=GREEN_COLOR
         )
 
-    def find_calibration_fringe_extrema(self, samples):
-
-        if not samples:
-            return None, None, 0
-
-        if len(samples) < 5:
-            return (
-                min(samples),
-                max(samples),
-                0,
-                DEFAULT_FRINGE_AMPLITUDE_V
-            )
-
-        smoothed_samples = []
-
-        for index in range(len(samples)):
-            start_index = max(
-                0,
-                index - 2
-            )
-            end_index = min(
-                len(samples),
-                index + 3
-            )
-            window = samples[start_index:end_index]
-            smoothed_samples.append(
-                sum(window) / len(window)
-            )
-
-        minima = []
-        maxima = []
-        extrema = []
-
-        for index in range(1, len(smoothed_samples) - 1):
-            previous_value = smoothed_samples[index - 1]
-            current_value = smoothed_samples[index]
-            next_value = smoothed_samples[index + 1]
-
-            if (
-                (
-                    current_value <= previous_value
-                    and current_value < next_value
-                )
-                or (
-                    current_value < previous_value
-                    and current_value <= next_value
-                )
-            ):
-                minima.append(current_value)
-                extrema.append(
-                    ("min", current_value)
-                )
-
-            if (
-                (
-                    current_value >= previous_value
-                    and current_value > next_value
-                )
-                or (
-                    current_value > previous_value
-                    and current_value >= next_value
-                )
-            ):
-                maxima.append(current_value)
-                extrema.append(
-                    ("max", current_value)
-                )
-
-        if minima and maxima:
-            fringe_amplitude = self.estimate_fringe_amplitude(
-                extrema,
-                max(maxima) - min(minima)
-            )
-
-            return (
-                min(minima),
-                max(maxima),
-                len(minima) + len(maxima),
-                fringe_amplitude
-            )
-
-        return (
-            min(smoothed_samples),
-            max(smoothed_samples),
-            0,
-            DEFAULT_FRINGE_AMPLITUDE_V
-        )
-
-    def estimate_fringe_amplitude(self, extrema, fallback_amplitude):
-
-        compressed_extrema = []
-
-        for kind, value in extrema:
-            if (
-                compressed_extrema
-                and compressed_extrema[-1][0] == kind
-            ):
-                previous_kind, previous_value = compressed_extrema[-1]
-
-                if (
-                    kind == "min"
-                    and value < previous_value
-                ):
-                    compressed_extrema[-1] = (previous_kind, value)
-
-                if (
-                    kind == "max"
-                    and value > previous_value
-                ):
-                    compressed_extrema[-1] = (previous_kind, value)
-
-                continue
-
-            compressed_extrema.append(
-                (kind, value)
-            )
-
-        amplitudes = []
-
-        for index in range(1, len(compressed_extrema)):
-            previous_kind, previous_value = compressed_extrema[index - 1]
-            current_kind, current_value = compressed_extrema[index]
-
-            if previous_kind == current_kind:
-                continue
-
-            amplitude = abs(
-                current_value - previous_value
-            )
-
-            if (
-                MIN_VALID_FRINGE_AMPLITUDE_V
-                <= amplitude
-                <= MAX_VALID_FRINGE_AMPLITUDE_V
-            ):
-                amplitudes.append(amplitude)
-
-        if amplitudes:
-            amplitudes.sort()
-            upper_half = amplitudes[len(amplitudes) // 2:]
-
-            return self.median_value(
-                upper_half
-            )
-
-        if (
-            MIN_VALID_FRINGE_AMPLITUDE_V
-            <= fallback_amplitude
-            <= MAX_VALID_FRINGE_AMPLITUDE_V
-        ):
-            return fallback_amplitude
-
-        return DEFAULT_FRINGE_AMPLITUDE_V
-
-    def median_value(self, values):
-
-        if not values:
-            return DEFAULT_FRINGE_AMPLITUDE_V
-
-        sorted_values = sorted(values)
-        middle_index = len(sorted_values) // 2
-
-        if len(sorted_values) % 2:
-            return sorted_values[middle_index]
-
-        return (
-            sorted_values[middle_index - 1]
-            + sorted_values[middle_index]
-        ) / 2
-
-    def configure_fringe_detection(self, amplitude_voltage):
-
-        if (
-            amplitude_voltage is None
-            or amplitude_voltage < MIN_VALID_FRINGE_AMPLITUDE_V
-            or amplitude_voltage > MAX_VALID_FRINGE_AMPLITUDE_V
-        ):
-            amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
-
-        self.fringe_amplitude_voltage = amplitude_voltage
-        self.fringe_rise_threshold_voltage = (
-            self.fringe_amplitude_voltage
-            * FRINGE_RISE_FRACTION
-        )
-        self.fringe_rearm_threshold_voltage = (
-            self.fringe_amplitude_voltage
-            * FRINGE_REARM_FRACTION
-        )
-        self.fringe_trough_voltage = None
-        self.fringe_peak_voltage = None
-        self.was_dark = False
-        self.dark_counter = 0
-        self.bright_counter = 0
-
-    def apply_calibration_extrema(
-        self,
-        calibration,
-        min_voltage,
-        max_voltage
-    ):
-
-        offset_voltage = (
-            min_voltage + max_voltage
-        ) / 2
-        scale_voltage = (
-            max_voltage - min_voltage
-        ) / 2
-
-        if scale_voltage <= 1e-12:
-            scale_voltage = 1.0
-
-        calibration.min_voltage = min_voltage
-        calibration.max_voltage = max_voltage
-        calibration.offset_voltage = offset_voltage
-        calibration.scale_voltage = scale_voltage
-
-        self.diode.counter.min_voltage = min_voltage
-        self.diode.counter.max_voltage = max_voltage
-        self.diode.counter.offset_voltage = offset_voltage
-        self.diode.counter.scale_voltage = scale_voltage
-
-    # -----------------------------------------------------------------------------
-    # 8.3 SHOW CURRENT VOLTAGE AND DISTANCE
-    # -----------------------------------------------------------------------------
-
-    def update_sample_display(self, sample):
+    def update_ui_display(self, sample, fringe_counted):
 
         self.latest_sample = sample
-        self.latest_voltage = sample.raw_voltage
-        fringe_counted = self.update_accumulated_fringes(
-            sample.raw_voltage
-        )
 
-        self.append_raw_history(
-            sample.raw_voltage
-        )
+        if USE_REFERENCE_DIODE:
+            self.label_raw_pint.configure(
+                text=f"Pint Raw Voltage: {sample.raw_int:+.6f} V"
+            )
+            self.label_raw_ref.configure(
+                text=f"Pl Raw Voltage: {sample.raw_ref:+.6f} V"
+            )
+            self.label_ratio.configure(
+                text=f"Ratio Pint/Pl: {sample.ratio:.6f}"
+            )
+            self.label_norm.configure(
+                text=f"Normalized Ratio: {sample.normalized_ratio:+.4f}"
+            )
+        else:
+            self.label_raw_pint.configure(
+                text=f"Pint Raw Voltage: {sample.raw_voltage:+.6f} V"
+            )
+            self.label_norm.configure(
+                text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
+            )
+
         self.update_plot()
 
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
@@ -1261,12 +1094,6 @@ class SideApp(ctk.CTk):
         )
         self.label_sample_count.configure(
             text=f"Accumulated Fringes Count: {self.accumulated_fringes}"
-        )
-        self.label_raw.configure(
-            text=f"Raw Voltage: {sample.raw_voltage:+.6f} V"
-        )
-        self.label_norm.configure(
-            text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
         )
 
         if fringe_counted:
@@ -1293,7 +1120,7 @@ class SideApp(ctk.CTk):
             voltage
         )
 
-        if len(self.smoothed_voltage_history) > SMOOTHING_WINDOW_LENGTH:
+        if len(self.smoothed_voltage_history) > 5:
             self.smoothed_voltage_history.pop(0)
 
         smooth_voltage = (
@@ -1301,71 +1128,66 @@ class SideApp(ctk.CTk):
             / len(self.smoothed_voltage_history)
         )
 
-        if self.fringe_trough_voltage is None:
-            self.fringe_trough_voltage = smooth_voltage
-            self.fringe_peak_voltage = smooth_voltage
-            return False
+        if smooth_voltage < self.dark_threshold:
+            self.dark_counter += 1
+        else:
+            self.dark_counter = 0
 
-        if self.fringe_peak_voltage is None:
-            self.fringe_peak_voltage = smooth_voltage
+        if self.dark_counter >= REQUIRED_DARK_FRAMES:
+            self.was_dark = True
+
+        if smooth_voltage > self.bright_threshold:
+            self.bright_counter += 1
+        else:
+            self.bright_counter = 0
+
+        if self.fringe_detect_state == "unknown":
+            self.fringe_current_max = smooth_voltage
+            self.fringe_current_min = smooth_voltage
+            self.fringe_detect_state = "rising"
+
+        hyst_triggered = False
+        if self.fringe_detect_state == "rising":
+            if smooth_voltage > self.fringe_current_max:
+                self.fringe_current_max = smooth_voltage
+            elif smooth_voltage < self.fringe_current_max - self.hysteresis:
+                self.fringe_detect_state = "falling"
+                self.fringe_current_min = smooth_voltage
+                self.half_fringe_count += 1
+                if self.half_fringe_count >= 2:
+                    hyst_triggered = True
+        elif self.fringe_detect_state == "falling":
+            if smooth_voltage < self.fringe_current_min:
+                self.fringe_current_min = smooth_voltage
+            elif smooth_voltage > self.fringe_current_min + self.hysteresis:
+                self.fringe_detect_state = "rising"
+                self.fringe_current_max = smooth_voltage
+                self.half_fringe_count += 1
+                if self.half_fringe_count >= 2:
+                    hyst_triggered = True
 
         cooldown_ok = (
             time.time() - self.last_count_time
         ) > FRINGE_COOLDOWN
 
-        if not self.was_dark:
-            if smooth_voltage > self.fringe_peak_voltage:
-                self.fringe_peak_voltage = smooth_voltage
-
-            drop_from_peak = (
-                self.fringe_peak_voltage
-                - smooth_voltage
-            )
-
-            if drop_from_peak >= self.fringe_rearm_threshold_voltage:
-                self.dark_counter += 1
-                self.fringe_trough_voltage = min(
-                    self.fringe_trough_voltage,
-                    smooth_voltage
-                )
-            else:
-                self.dark_counter = 0
-
-            if self.dark_counter >= REQUIRED_DARK_FRAMES:
-                self.was_dark = True
-                self.fringe_trough_voltage = smooth_voltage
-                self.bright_counter = 0
-
-            return False
-
-        if smooth_voltage < self.fringe_trough_voltage:
-            self.fringe_trough_voltage = smooth_voltage
-            self.bright_counter = 0
-            return False
-
-        rise_from_trough = (
-            smooth_voltage
-            - self.fringe_trough_voltage
-        )
-
-        if rise_from_trough >= self.fringe_rise_threshold_voltage:
-            self.bright_counter += 1
-        else:
-            self.bright_counter = 0
-
-        if (
+        abs_triggered = (
             self.was_dark
             and self.bright_counter >= REQUIRED_BRIGHT_FRAMES
-            and cooldown_ok
-        ):
+        )
+
+        if (abs_triggered or hyst_triggered) and cooldown_ok:
             self.accumulated_fringes += 1
+
             self.was_dark = False
-            self.last_count_time = time.time()
             self.dark_counter = 0
             self.bright_counter = 0
-            self.fringe_peak_voltage = smooth_voltage
-            self.fringe_trough_voltage = smooth_voltage
 
+            self.fringe_detect_state = "unknown"
+            self.fringe_current_max = smooth_voltage
+            self.fringe_current_min = smooth_voltage
+            self.half_fringe_count = 0
+
+            self.last_count_time = time.time()
             return True
 
         return False
@@ -1461,7 +1283,6 @@ class SideApp(ctk.CTk):
         self.latest_sample = None
         self.latest_voltage = 0.0
         self.raw_voltage_history = []
-        self.calibration_raw_samples = []
         self.smoothed_voltage_history = []
         #defines what the values should look like after pressing reset
         self.accumulated_fringes = 0
@@ -1469,8 +1290,11 @@ class SideApp(ctk.CTk):
         self.dark_counter = 0
         self.bright_counter = 0
         self.last_count_time = 0.0
-        self.fringe_trough_voltage = None
-        self.fringe_peak_voltage = None
+
+        self.fringe_detect_state = "unknown"
+        self.fringe_current_max = 0.0
+        self.fringe_current_min = 0.0
+        self.half_fringe_count = 0
 
         self.reset_stage_movement_tracking() # function defined later
 
@@ -1480,27 +1304,60 @@ class SideApp(ctk.CTk):
         self.label_ps.configure(
             text="Time Delay: 0.0000 ps"
         )
-        self.label_calibration_offset.configure(
-            text="Fringe Rise Threshold: waiting"
-        )
-        self.label_calibration_scale.configure(
-            text="Fringe Amplitude: waiting"
-        )
+        if USE_REFERENCE_DIODE:
+            self.label_calibration_offset.configure(
+                text="Dark Threshold Ratio: waiting"
+            )
+            self.label_calibration_scale.configure(
+                text="Bright Threshold Ratio: waiting"
+            )
+            self.label_hysteresis.configure(
+                text="Hysteresis Ratio: waiting"
+            )
+            self.label_min_ratio.configure(
+                text="Min Ratio: n/a"
+            )
+            self.label_max_ratio.configure(
+                text="Max Ratio: n/a"
+            )
+            self.label_raw_pint.configure(
+                text="Pint Raw Voltage: 0.000000 V"
+            )
+            self.label_raw_ref.configure(
+                text="Pl Raw Voltage: 0.000000 V"
+            )
+            self.label_ratio.configure(
+                text="Ratio Pint/Pl: 0.000000"
+            )
+            self.label_norm.configure(
+                text="Normalized Ratio: 0.0000"
+            )
+        else:
+            self.label_calibration_offset.configure(
+                text="Dark Threshold: waiting"
+            )
+            self.label_calibration_scale.configure(
+                text="Bright Threshold: waiting"
+            )
+            self.label_hysteresis.configure(
+                text="Hysteresis: waiting"
+            )
+            self.label_min_ratio.configure(
+                text="Min Voltage: n/a"
+            )
+            self.label_max_ratio.configure(
+                text="Max Voltage: n/a"
+            )
+            self.label_raw_pint.configure(
+                text="Pint Raw Voltage: 0.000000 V"
+            )
+            self.label_norm.configure(
+                text="Normalized Voltage: 0.0000"
+            )
+
         self.label_sample_count.configure(
             text="Accumulated Fringes Count: 0",
             text_color=TEXT_COLOR
-        )
-        self.label_min_voltage.configure(
-            text="Min Voltage: n/a"
-        )
-        self.label_max_voltage.configure(
-            text="Max Voltage: n/a"
-        )
-        self.label_raw.configure(
-            text="Raw Voltage: 0.000000 V"
-        )
-        self.label_norm.configure(
-            text="Normalized Voltage: 0.0000"
         )
         self.label_calibration.configure(
             text="Calibration: waiting",
@@ -1668,20 +1525,8 @@ class SideApp(ctk.CTk):
             return False
 
         if self.stage.is_moving:
-            self.update_still_to_drive_label()
-
-            if self.stage_remaining_known:
-                remaining_text = (
-                    f"{self.stage_remaining_to_drive:.6f} mm"
-                )
-            else:
-                remaining_text = "target unknown"
-
             self.status.configure(
-                text=(
-                    f"Stage is already moving, still to drive "
-                    f"{remaining_text}"
-                ),
+                text="Stage is already moving",
                 text_color=ORANGE_COLOR
             )
             return False
@@ -1710,10 +1555,6 @@ class SideApp(ctk.CTk):
 
         self.stage_start_position = start_pos
         self.stage_movement_before_move = self.total_stage_movement
-        self.set_stage_target_position(
-            target_mm,
-            start_pos
-        )
         self.reset_stage_speed_tracking(start_pos)
 
         if abs(move_mm) < 1e-12:
@@ -1726,7 +1567,6 @@ class SideApp(ctk.CTk):
                 text="Stage already at target",
                 text_color=TEXT_COLOR
             )
-            self.clear_stage_target_position()
             return
 
         if not self.stage.move_absolute(target_mm):
@@ -1734,7 +1574,6 @@ class SideApp(ctk.CTk):
                 text="Stage move failed",
                 text_color=RED_COLOR
             )
-            self.clear_stage_target_position()
             return
 
         self.status.configure(
@@ -1797,10 +1636,6 @@ class SideApp(ctk.CTk):
         #safe the values for the stage_ui_loop
         self.stage_start_position = start_pos
         self.stage_movement_before_move = self.total_stage_movement
-        self.set_stage_target_position(
-            target_mm,
-            start_pos
-        )
         self.reset_stage_speed_tracking(start_pos)
 
         if step_mm is None:
@@ -1815,7 +1650,6 @@ class SideApp(ctk.CTk):
                 text="Invalid step size",
                 text_color=RED_COLOR
             )
-            self.clear_stage_target_position()
             return
 
         #if none of the above cases stops the stage from moving, create a movement thread and start the movement
@@ -1900,10 +1734,6 @@ class SideApp(ctk.CTk):
                         text_color=RED_COLOR
                     )
                 )
-                self.after(
-                    0,
-                    self.clear_stage_target_position
-                )
                 return
 
             while self.stage.is_moving:
@@ -1986,7 +1816,6 @@ class SideApp(ctk.CTk):
             moved,
             self.stage_movement_before_move
         )
-        self.clear_stage_target_position()
         self.label_stage_speed.configure(
             text="Movement Speed: 0.000000 mm/s"
         )
@@ -2123,33 +1952,6 @@ class SideApp(ctk.CTk):
                 text_color=ORANGE_COLOR
             )
 
-    def poll_stage_status(self):
-
-        try:
-            if self.stage_connected:
-                pos = self.stage.get_position()
-
-                self.label_stage_position.configure(
-                    text=f"Stage Position: {pos:.6f} mm"
-                )
-                self.update_still_to_drive_label(pos)
-
-                if self.stage.is_moving:
-                    self.update_stage_speed_label(pos)
-                elif (
-                    self.stage_remaining_known
-                    and self.stage_remaining_to_drive <= 0
-                ):
-                    self.label_stage_speed.configure(
-                        text="Movement Speed: 0.000000 mm/s"
-                    )
-
-        finally:
-            self.after(
-                STAGE_STATUS_POLL_MS,
-                self.poll_stage_status
-            )
-
     # -----------------------------------------------------------------------------
     # 7.3 UPDATE STAGE MOVEMENT DISPLAY
     # -----------------------------------------------------------------------------
@@ -2175,80 +1977,10 @@ class SideApp(ctk.CTk):
                 f"{current_total_stage_movement:.6f} mm"
             )
         )
-        self.update_still_to_drive_label(pos)
         self.update_stage_speed_label(pos)
         self.update_comparison_labels(
             current_total_stage_movement
         )
-
-    def set_stage_target_position(self, target_mm, current_pos=None):
-
-        self.stage_target_position = target_mm
-
-        if current_pos is None:
-            if self.stage_connected:
-                current_pos = self.stage.get_position()
-            else:
-                current_pos = target_mm
-
-        self.update_still_to_drive_label(current_pos)
-
-    def clear_stage_target_position(self):
-
-        self.stage_target_position = None
-        self.stage_remaining_to_drive = 0.0
-        self.stage_remaining_known = True
-
-        if hasattr(self, "label_still_to_drive"):
-            self.label_still_to_drive.configure(
-                text="Still to drive: 0.000000 mm"
-            )
-
-    def update_still_to_drive_label(self, pos=None):
-
-        target_position = self.get_active_stage_target_position()
-
-        if target_position is None:
-            self.stage_remaining_to_drive = 0.0
-            self.stage_remaining_known = (
-                not self.stage_connected
-                or not self.stage.is_moving
-            )
-        else:
-            self.stage_remaining_known = True
-
-            if pos is None:
-                if self.stage_connected:
-                    pos = self.stage.get_position()
-                else:
-                    pos = target_position
-
-            self.stage_remaining_to_drive = abs(
-                target_position - pos
-            )
-
-            if self.stage_remaining_to_drive < 1e-6:
-                self.stage_remaining_to_drive = 0.0
-
-        if hasattr(self, "label_still_to_drive"):
-            if self.stage_remaining_known:
-                label_text = (
-                    f"Still to drive: "
-                    f"{self.stage_remaining_to_drive:.6f} mm"
-                )
-            else:
-                label_text = "Still to drive: target unknown"
-
-            self.label_still_to_drive.configure(
-                text=label_text
-            )
-
-    def get_active_stage_target_position(self):
-
-        if self.stage_target_position is not None:
-            return self.stage_target_position
-
-        return None
 
     # -----------------------------------------------------------------------------
     # 7.5 RESET STAGE SPEED TRACKING
@@ -2299,9 +2031,6 @@ class SideApp(ctk.CTk):
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
-        self.stage_target_position = None
-        self.stage_remaining_to_drive = 0.0
-        self.stage_remaining_known = True
 
         if pos is not None: # use provided position as new reference
             self.stage_reference_position = pos
@@ -2319,7 +2048,6 @@ class SideApp(ctk.CTk):
         self.label_stage_speed.configure(
             text="Movement Speed: 0.000000 mm/s"
         )
-        self.clear_stage_target_position()
 
     # -----------------------------------------------------------------------------
     # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
@@ -2367,10 +2095,6 @@ class SideApp(ctk.CTk):
 
             self.stage_start_position = current_position
             self.stage_movement_before_move = self.total_stage_movement
-            self.set_stage_target_position(
-                final_target,
-                current_position
-            )
             self.reset_stage_speed_tracking(current_position)
 
             self.after(
@@ -2393,10 +2117,6 @@ class SideApp(ctk.CTk):
                         text="Stage move failed",
                         text_color=RED_COLOR
                     )
-                )
-                self.after(
-                    0,
-                    self.clear_stage_target_position
                 )
                 return
 
@@ -2426,13 +2146,6 @@ class SideApp(ctk.CTk):
 
             self.stage_start_position = current_position
             self.stage_movement_before_move = self.total_stage_movement
-            stepped_target = self.stage.clamp_position(
-                current_position + STEP_SIZE_MM * STEPS
-            )
-            self.set_stage_target_position(
-                stepped_target,
-                current_position
-            )
             self.reset_stage_speed_tracking(current_position)
 
             self.after(
@@ -2512,180 +2225,66 @@ class SideApp(ctk.CTk):
 
     def calibration_stage_motion(self):
 
-        previous_velocity = None
-
         try:
             if not self.stage_connected: # refuse movement commands when stage is not connected
                 return
 
             start_pos = self.stage.get_position() # current stage position as movement start
-            forward_target = self.stage.clamp_position(
-                start_pos + CALIBRATION_STAGE_DISTANCE_MM
-            )
-            back_target = self.stage.clamp_position(start_pos)
-            sweep_distance_mm = abs(
-                forward_target - start_pos
-            )
+            step_mm = 0.0001
+            steps = 8
 
-            if sweep_distance_mm <= 1e-12:
-                return
+            # move forward in 4 steps
+            for i in range(1, steps + 1):
+                if not self.is_monitoring:
+                    return
 
-            previous_velocity = self.stage.set_velocity()
-            calibration_speed_mm_s = CALIBRATION_STAGE_SPEED_MM_S
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
 
-            if not self.stage.set_velocity(calibration_speed_mm_s):
-                return
+                if not self.stage.move_absolute(target):
+                    return
 
-            self.stage_start_position = start_pos
-            self.stage_movement_before_move = 0.0
-            self.reset_stage_speed_tracking(start_pos)
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
 
-            self.after(
-                0,
-                lambda:
-                self.status.configure(
-                    text=(
-                        f"Calibration sweep: "
-                        f"{sweep_distance_mm:.5f} mm "
-                        f"at {calibration_speed_mm_s:.6f} mm/s"
-                    ),
-                    text_color=ORANGE_COLOR
-                )
-            )
+                time.sleep(0.25)
 
-            accumulated_movement_mm = 0.0
+            # move back in 4 steps
+            for i in range(steps - 1, -1, -1):
+                if not self.is_monitoring:
+                    return
 
-            while self.is_monitoring and self.calibrating:
-                for target in (forward_target, back_target):
-                    if not self.is_monitoring or not self.calibrating:
-                        return
+                target = start_pos + step_mm * i
+                target = self.stage.clamp_position(target)
 
-                    leg_start_pos = self.stage.get_position()
-                    self.stage_target_position = target
-                    self.stage_remaining_known = True
+                if not self.stage.move_absolute(target):
+                    return
 
-                    if not self.stage.move_absolute(target):
-                        return
+                while self.stage.is_moving and self.is_monitoring:
+                    time.sleep(0.01)
 
-                    while (
-                        self.stage.is_moving
-                        and self.is_monitoring
-                        and self.calibrating
-                    ):
-                        current_pos = self.stage.get_position()
-                        moved = accumulated_movement_mm + abs(
-                            current_pos - leg_start_pos
-                        )
-                        self.after(
-                            0,
-                            lambda p=current_pos, m=moved:
-                            self.update_stage_labels(p, m, 0.0)
-                        )
-                        time.sleep(0.01)
-
-                    if not self.is_monitoring or not self.calibrating:
-                        return
-
-                    current_pos = self.stage.get_position()
-                    accumulated_movement_mm += abs(current_pos - leg_start_pos)
-                    self.total_stage_movement = accumulated_movement_mm
-                    self.current_stage_movement_for_compare = accumulated_movement_mm
-                    self.after(
-                        0,
-                        lambda p=current_pos, m=accumulated_movement_mm:
-                        self.update_stage_labels(p, m, 0.0)
-                    )
+                time.sleep(0.25)
 
         finally:
-            if (
-                self.stage_connected
-                and self.stage.is_moving
-            ):
-                self.stage.stop()
-
-            if previous_velocity is not None and self.stage_connected:
-                self.stage.set_velocity(previous_velocity)
-
-            pos = self.stage.get_position()
-            self.after(
-                0,
-                lambda p=pos, m=accumulated_movement_mm:
-                self.finish_calibration_movement(p, m)
-            )
-
-    def stop_calibration_stage_motion(self):
-
-        if not self.stage_connected:
-            return
-
-        self.clear_stage_target_position()
-
-        if self.stage.is_moving:
-            self.stage.stop()
-
-        self.after(
-            0,
-            lambda:
-            self.status.configure(
-                text="Calibration ended, stage stopped",
-                text_color=ORANGE_COLOR
-            )
-        )
+            self.after(0, self.finish_calibration_movement)
 
     # -----------------------------------------------------------------------------
     # 7.10 FINISH CALIBRATION RESET
     # -----------------------------------------------------------------------------
 
-    def finish_calibration_movement(self, pos=None, accumulated_movement_mm=None):
+    def finish_calibration_movement(self):
 
-        if self.stage_connected and self.stage.is_moving:
-            self.stage.stop()
-            self.status.configure(
-                text="Calibration ended, waiting for stage stop",
-                text_color=ORANGE_COLOR
-            )
-            self.after(
-                STAGE_STATUS_POLL_MS,
-                lambda p=pos, m=accumulated_movement_mm: self.finish_calibration_movement(p, m)
-            )
-            return
-
-        if pos is None:
-            if self.stage_connected:
-                pos = self.stage.get_position()
-            else:
-                pos = 0.0
-
-        if accumulated_movement_mm is None:
-            self.reset_stage_movement_tracking(pos)
+        if self.stage_connected:
+            current_pos = self.stage.get_position()
+            self.reset_stage_movement_tracking(current_pos)
         else:
-            self.stage_reference_position = pos
-            self.total_stage_movement = accumulated_movement_mm
-            self.current_stage_movement_for_compare = accumulated_movement_mm
-
-            self.label_stage_position.configure(
-                text=f"Stage Position: {pos:.6f} mm"
-            )
-            self.label_stage_moved.configure(
-                text=f"Accumulated Movement: {accumulated_movement_mm:.6f} mm"
-            )
-            self.clear_stage_target_position()
-            self.update_comparison_labels(accumulated_movement_mm)
-
-        if self.calibrating:
-            self.status.configure(
-                text="Calibration sweep finished",
-                text_color=ORANGE_COLOR
-            )
-            return
+            self.reset_stage_movement_tracking(150.0)
 
         self.set_buttons_enabled(True)
-
-        if self.is_monitoring:
-            self.status.configure(
-                text="Monitoring running",
-                text_color=GREEN_COLOR
-            )
+        self.status.configure(
+            text="Monitoring running",
+            text_color=GREEN_COLOR
+        )
 
     # -----------------------------------------------------------------------------
     # 9.1 SHUT DOWN HARDWARE CLEANLY

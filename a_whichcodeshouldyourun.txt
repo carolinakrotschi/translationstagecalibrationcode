@@ -1,12 +1,16 @@
 Which code to use for what? A nomenclature guide
 
-- all the files with "_thor" at the end, are connected to the Thorlabs Kinesis Long Travel Stage
+- all the files starting with "thor_" are connected to the Thorlabs Kinesis Long Travel Stage
 - all other files are connected to the PI Mikro Move Translation stage
 - no matter if Thor or PI, the structure is the same:
-    - main.py: programm to run and main body of the software
-    - camera_handler.py is called by main.py and controls all information regarding the camera
-    - diode_handler.py is called by side.py and controls all the information regarding the photodiode
-    - stage_controller.py is called by main.py and controls all information regarding the stage
-    - homodyne.py is basically main.py but for the quadrature homodyne interferometer (this means: 2 photodiodes!)
-    - side.py is basically main.py but detection with a photodiode and not a camera
-    - side_reference.py is side.py but with 2 photodiodes, where 1 serves as a reference to normalize the signal
+
+Main programs:
+    - main_camera.py / thor_main_camera.py: main program using a camera for detection
+    - main_diode.py / thor_main_diode.py: main program using a single photodiode for detection
+    - main_diode_reference.py / thor_main_diode_reference.py: main program using 2 photodiodes (1 measurement + 1 reference)
+    - main_homodyne.py / thor_main_homodyne.py: main program using 2 photodiodes for quadrature homodyne (direction-aware)
+
+Handlers (imported modules):
+    - handler_camera.py: controls all camera interface logic
+    - handler_diode.py: controls all photodiode signals and calibration
+    - handler_stage.py / thor_handler_stage.py: controls translation stage communication and motion
