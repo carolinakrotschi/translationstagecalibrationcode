@@ -58,6 +58,7 @@ FRINGE_DISTANCE_MM = (
 )
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
 # -----------------------------------------------------------------------------
 # 3.1 COLORS AND FILTER TIMINGS
 # -----------------------------------------------------------------------------
@@ -76,6 +77,9 @@ FRINGE_COOLDOWN = 0.08
 LOCK_CORRECTION_COOLDOWN = 0.20
 #after calibration, 2s cooldown so that no buttons can be pressed immediately
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
+#mode for target, distance and center movements: "continuous" or "stepped"
+MODE = "continuous"
+CALIBRATION_SWEEP_DISTANCE_MM = 0.0004
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -146,6 +150,7 @@ class InterferometerApp(ctk.CTk):
         self.camera_connected = False
         #same for the stage
         self.stage = StageController()
+        self.stage.set_velocity(DEFAULT_STAGE_SPEED_MM_S)
         self.stage_connected = False
 
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
@@ -164,6 +169,7 @@ class InterferometerApp(ctk.CTk):
         self.center_stage_after_calibration_pending = False #stage has to center after calibration
         self.returning_stage_after_calibration = False #return stage after calibration
         self.calibration_motion_started = False #prevents starting the calibration more than once
+        self.calibration_stage_stop_done = False
         self.calibration_button_cooldown_active = False
         #for stage locking
         self.lock_active = False #state of the position lock
@@ -252,6 +258,13 @@ class InterferometerApp(ctk.CTk):
 
         self.wavelength_button.pack(pady=1)
 
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Step size",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(4, 0))
+
         self.step_entry = ctk.CTkEntry(
             self.stage_frame,
             placeholder_text="Step size in mm",
@@ -264,6 +277,35 @@ class InterferometerApp(ctk.CTk):
             #I found, that the interferometer works best, if the step size is 1/4 of the fringe distance
             f"{(self.fringe_distance_mm / 4):.7f}"
         )
+
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Velocity",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(4, 0))
+
+        self.speed_entry = ctk.CTkEntry(
+            self.stage_frame,
+            placeholder_text="Velocity in mm/s",
+            width=250
+        )
+
+        self.speed_entry.pack(pady=1)
+        self.speed_entry.insert(
+            0,
+            f"{DEFAULT_STAGE_SPEED_MM_S:.6f}"
+        )
+
+        self.speed_button = ctk.CTkButton(
+            self.stage_frame,
+            text="Set velocity",
+            width=120,
+            command=self.apply_stage_speed,
+            fg_color=TEXT_COLOR
+        )
+
+        self.speed_button.pack(pady=1)
 
         self.button_frame = ctk.CTkFrame(
             self.stage_frame,
@@ -320,6 +362,21 @@ class InterferometerApp(ctk.CTk):
         self.btn_target_rel.grid(
             row=0,
             column=1,
+            padx=1
+        )
+
+        self.btn_stop = ctk.CTkButton(
+            self.target_button_frame,
+            text="STOP STAGE",
+            width=140,
+            command=self.stop_stage,
+            fg_color=RED_COLOR,
+            font=("Arial", 11, "bold")
+        )
+
+        self.btn_stop.grid(
+            row=0,
+            column=2,
             padx=1
         )
 
@@ -555,8 +612,10 @@ class InterferometerApp(ctk.CTk):
             self.btn,
             self.restart_btn,
             self.wavelength_button,
+            self.speed_button,
             self.btn_target_abs,
             self.btn_target_rel,
+            self.btn_stop,
             self.btn_min,
             self.btn_left,
             self.btn_center,
@@ -569,27 +628,39 @@ class InterferometerApp(ctk.CTk):
 
         self.update_stage_position_once()#reads the current stage position and updates the label, this is important to have the correct position at the beginning
 
-        # Start connection in a background thread so the GUI does not freeze during startup
+        # The PI stage connection must start from the Tk/main thread.
+        # Camera connection can still run in the background afterwards.
         self.status.configure(
             text="Connecting to hardware (camera, stage)...",
             text_color=ORANGE_COLOR
         )
         self.set_buttons_enabled(False)
-        threading.Thread(target=self.connect_hardware, daemon=True).start()
+        self.after(100, self.connect_hardware)
     # -----------------------------------------------------------------------------
     # 4.1.1 HARDWARE CONNECTION WORKER AND CALLBACK
     # -----------------------------------------------------------------------------
 
     def connect_hardware(self):
-        # Connect camera and stage in background
-        cam_ok = self.camera_handler.connect()
+        # Connect stage from the main thread, then connect camera in background.
         stage_ok = self.stage.connect()
-        
+
+        threading.Thread(
+            target=self.connect_camera_after_stage,
+            args=(stage_ok,),
+            daemon=True
+        ).start()
+
+    def connect_camera_after_stage(self, stage_ok):
+        cam_ok = self.camera_handler.connect()
+
         self.after(0, lambda: self.on_hardware_connected(cam_ok, stage_ok))
 
     def on_hardware_connected(self, cam_ok, stage_ok):
         self.camera_connected = cam_ok
         self.stage_connected = stage_ok
+
+        if stage_ok:
+            self.apply_stage_speed(update_status=False)
         
         self.set_buttons_enabled(True)
         
@@ -679,6 +750,9 @@ class InterferometerApp(ctk.CTk):
                 return #stops the method
 
             self.disable_lock(update_status=False) #disables previous lock states so start/stop begins clean
+
+            if self.stage_connected:
+                self.apply_stage_speed(update_status=False)
 
             self.restart_values_only() #resets all measurement values
 
@@ -774,6 +848,7 @@ class InterferometerApp(ctk.CTk):
 
         self.calibrating = False
         self.calibration_motion_started = False
+        self.calibration_stage_stop_done = False
 
         self.calibration_values = []
 
@@ -839,6 +914,13 @@ class InterferometerApp(ctk.CTk):
                     text="Stage is already moving",
                     text_color=ORANGE_COLOR
                 )
+
+            return
+
+        if not self.apply_stage_speed(update_status=False):
+
+            if reset_after_move:
+                self.reset_stage_after_calibration()
 
             return
 
@@ -931,6 +1013,9 @@ class InterferometerApp(ctk.CTk):
                 text="Stage is already moving",
                 text_color=ORANGE_COLOR
             )
+            return
+
+        if not self.apply_stage_speed(update_status=False):
             return
 
         start_pos = self.stage.get_position()
@@ -1034,6 +1119,66 @@ class InterferometerApp(ctk.CTk):
             return abs(value)
         except ValueError:
             return 0.0001 #safe default size when step size invalid
+
+    def get_stage_speed(self):
+
+        try:
+            value = float(
+                self.speed_entry.get().replace(",", ".")
+            )
+            if value <= 0:
+                raise ValueError
+            return abs(value)
+
+        except ValueError:
+            return DEFAULT_STAGE_SPEED_MM_S
+
+    def apply_stage_speed(self, update_status=True):
+
+        speed_mm_s = self.get_stage_speed()
+
+        self.speed_entry.delete(0, "end")
+        self.speed_entry.insert(
+            0,
+            f"{speed_mm_s:.6f}"
+        )
+
+        if not self.stage_connected:
+            self.stage.set_velocity(speed_mm_s)
+
+            if update_status:
+                self.status.configure(
+                    text="Stage not connected",
+                    text_color=RED_COLOR
+                )
+
+            return False
+
+        if not self.stage.set_velocity(speed_mm_s):
+
+            if update_status:
+                error_text = (
+                    self.stage.last_error
+                    or "Could not set stage velocity"
+                )
+                self.status.configure(
+                    text=error_text,
+                    text_color=RED_COLOR
+                )
+
+            return False
+
+        if update_status:
+            self.status.configure(
+                text=f"Stage velocity set to {speed_mm_s:.6f} mm/s",
+                text_color=GREEN_COLOR
+            )
+
+        return True
+
+    def use_continuous_stage_mode(self):
+
+        return MODE.lower().startswith("c")
     # -----------------------------------------------------------------------------
     # 5.7 CALCULATE FRINGE DISTANCE
     # -----------------------------------------------------------------------------
@@ -1094,9 +1239,15 @@ class InterferometerApp(ctk.CTk):
 
     def move_to_center(self):
 
-        self.start_stage_move_to_stepped( #move to center button also goes in steps
-            0.0
-        )
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_to(
+                0.0
+            )
+
+        else:
+            self.start_stage_move_to_stepped(
+                0.0
+            )
 
     def step_positive(self):
 
@@ -1123,7 +1274,11 @@ class InterferometerApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_to_stepped(target_mm)
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_to(target_mm)
+
+        else:
+            self.start_stage_move_to_stepped(target_mm)
 
     def move_distance_by_steps(self):
 
@@ -1138,11 +1293,27 @@ class InterferometerApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_by_steps(distance_mm)
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_by(distance_mm)
+
+        else:
+            self.start_stage_move_by_steps(distance_mm)
 
     def stop_stage(self):
 
+        if not self.stage_connected:
+            self.status.configure(
+                text="Stage not connected",
+                text_color=RED_COLOR
+            )
+            return
+
         self.stage.stop()
+
+        self.status.configure(
+            text="Stage stopped manually",
+            text_color=RED_COLOR
+        )
     # -----------------------------------------------------------------------------
     # 6.1 ENABLE OR DISABLE POSITION LOCK
     # -----------------------------------------------------------------------------
@@ -1566,23 +1737,52 @@ class InterferometerApp(ctk.CTk):
 
         self.update_comparison_labels(0.0)
     # -----------------------------------------------------------------------------
-    # 7.6 START RETURN AFTER CALIBRATION
+    # 7.6 STOP STAGE AFTER CALIBRATION
     # -----------------------------------------------------------------------------
-    #return the stage to zero after calibration
+    #stop the stage where it is after calibration
     def finish_calibration_stage_reset(self):
 
-        self.returning_stage_after_calibration = True #mark that stage is returning
+        if self.calibration_stage_stop_done:
+            return
 
-        self.status.configure(
-            text="Calibration done - stage returning to 0.00000000000 mm",
-            text_color=ORANGE_COLOR
-        )
+        self.calibration_stage_stop_done = True
+        self.center_stage_after_calibration_pending = False
 
-        self.start_stage_move_to(
-            #reuse the central movement routine
-            0.0,
-            reset_after_move=True
-        )
+        if not self.is_monitoring:
+
+            if self.stage_connected and self.stage.is_moving:
+                self.stage.stop()
+
+            self.returning_stage_after_calibration = False
+            return
+
+        self.returning_stage_after_calibration = True
+
+        pos = None
+
+        if self.stage_connected:
+
+            if self.stage.is_moving:
+                self.stage.stop()
+
+            pos = self.stage.get_position()
+
+        self.reset_stage_after_calibration(pos)
+
+        if pos is not None:
+            self.status.configure(
+                text=(
+                    f"Calibration done - stage stopped at {pos:.6f} mm "
+                    "(buttons locked for 2s)"
+                ),
+                text_color=GREEN_COLOR
+            )
+
+        else:
+            self.status.configure(
+                text="Calibration done - stage stopped (buttons locked for 2s)",
+                text_color=GREEN_COLOR
+            )
     # -----------------------------------------------------------------------------
     # 7.7 MOVE STAGE DURING CALIBRATION
     # -----------------------------------------------------------------------------
@@ -1595,47 +1795,69 @@ class InterferometerApp(ctk.CTk):
                 return
 
             start_pos = self.stage.get_position() #current stage position as movement start
-            step_mm = 0.0001
-            steps = 4
+            sweep_target = self.stage.clamp_position(
+                start_pos + CALIBRATION_SWEEP_DISTANCE_MM
+            )
 
-            # move forward in 4 steps
-            for i in range(1, steps + 1):
-                if not self.is_monitoring: #stop calibration movement if monitoring is stopped
+            if abs(sweep_target - start_pos) < 1e-12:
+                sweep_target = self.stage.clamp_position(
+                    start_pos - CALIBRATION_SWEEP_DISTANCE_MM
+                )
+
+            if abs(sweep_target - start_pos) < 1e-12:
+                return
+
+            targets = [
+                sweep_target,
+                start_pos
+            ]
+
+            for target in targets:
+                if not self.is_monitoring or not self.calibrating:
                     return
 
-                target = start_pos + step_mm * i
-                target = self.stage.clamp_position(target)
+                self.after(
+                    0,
+                    lambda t=target:
+                    self.status.configure(
+                        text=f"Calibrating - smooth stage sweep to {t:.6f} mm",
+                        text_color=ORANGE_COLOR
+                    )
+                )
 
                 if not self.stage.move_absolute(target):
                     return
 
-                while self.stage.is_moving and self.is_monitoring:
-                    time.sleep(0.01)
+                while (
+                    self.stage.is_moving
+                    and self.is_monitoring
+                    and self.calibrating
+                ):
+                    pos = self.stage.get_position()
+                    moved = abs(pos - start_pos)
 
-                time.sleep(0.25)
+                    self.after(
+                        0,
+                        lambda p=pos, m=moved:
+                        self.update_stage_labels(p, m, 0.0)
+                    )
 
-            # move back in 4 steps
-            for i in range(steps - 1, -1, -1):
-                if not self.is_monitoring:
-                    return
+                    time.sleep(0.02)
 
-                target = start_pos + step_mm * i
-                target = self.stage.clamp_position(target)
-
-                if not self.stage.move_absolute(target):
-                    return
-
-                while self.stage.is_moving and self.is_monitoring:
-                    time.sleep(0.01)
-
-                time.sleep(0.25)
+            if self.is_monitoring and self.calibrating:
+                self.after(
+                    0,
+                    lambda:
+                    self.status.configure(
+                        text="Calibrating - stage sweep done",
+                        text_color=ORANGE_COLOR
+                    )
+                )
 
         finally:
 
-            self.after(
-                0,
-                self.start_pending_center_after_calibration
-            )
+            if self.stage_connected and self.stage.is_moving:
+                self.stage.stop()
     # -----------------------------------------------------------------------------
     # 7.8 START PENDING RETURN AFTER CALIBRATION MOTION
     # -----------------------------------------------------------------------------

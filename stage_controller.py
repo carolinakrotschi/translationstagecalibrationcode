@@ -27,8 +27,8 @@ class StageController:
         self.step_size = 0.020000000
         self.velocity = 0.0006
         self.is_moving = False
-        self.min_position = -12.5
-        self.max_position = 12.5
+        self.min_position = 0
+        self.max_position = 50
 
     def connect(self):
 
