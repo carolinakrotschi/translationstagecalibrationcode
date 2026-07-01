@@ -41,6 +41,7 @@ class StageController:
         self.target_position = 0.0
         self.step_size = 0.020000000
         self.velocity = 0.0006
+        self.acceleration = 0.0
         self.is_moving = False
         self.min_position = 0
         self.max_position = 50
@@ -312,9 +313,14 @@ class StageController:
     def set_step_size(self, step_size):
         self.step_size = float(step_size)
 
-    def set_velocity(self, vel=None):
+    def set_velocity(self, vel=None, acceleration_mm_s2=None):
         if vel is not None:
             self.velocity = float(vel)
+            if acceleration_mm_s2 is None:
+                self.acceleration = 0.0
+            else:
+                self.acceleration = abs(float(acceleration_mm_s2))
+
             if self.connected and self.device is not None:
                 try:
                     self.device.VEL(STAGE_AXIS, self.velocity) #send velocity command to hardware

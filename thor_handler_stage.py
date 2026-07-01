@@ -22,8 +22,9 @@ clr.AddReference(r"C:\Program Files\Thorlabs\Kinesis\Thorlabs.MotionControl.Inte
 from Thorlabs.MotionControl.DeviceManagerCLI import DeviceManagerCLI
 from Thorlabs.MotionControl.IntegratedStepperMotorsCLI import LongTravelStage
 
-REQUESTED_ACCELERATION = 0.0
+REQUESTED_ACCELERATION = 1.0
 FALLBACK_MOVING_ACCELERATION = 1.0
+MIN_ACCELERATION = 0.5
 
 # -----------------------------------------------------------------------------
 # 2. STAGECONTROLLER CLASS AND CONNECTION
@@ -43,7 +44,7 @@ class StageController:
         self.step_size = 0.001
         self.velocity = 0.0006
         self.requested_acceleration = REQUESTED_ACCELERATION
-        self.acceleration = FALLBACK_MOVING_ACCELERATION
+        self.acceleration = 0.0
 
         self.is_moving = False
 
@@ -51,19 +52,67 @@ class StageController:
         self.max_position = 300.0
         self.home_on_connect = True
 
+    def _get_discovered_serial_numbers(self):
+
+        try:
+            DeviceManagerCLI.BuildDeviceList()
+            device_list = DeviceManagerCLI.GetDeviceList()
+
+            if device_list is None:
+                return []
+
+            try:
+                count = int(getattr(device_list, "Count", 0))
+            except Exception:
+                count = None
+
+            if count is not None:
+                return [
+                    str(device_list[i])
+                    for i in range(count)
+                    if str(device_list[i]).strip()
+                ]
+
+            return [str(item) for item in list(device_list) if str(item).strip()]
+
+        except Exception as e:
+            self.last_error = f"Could not enumerate Thorlabs devices: {e}"
+            print(self.last_error)
+            return []
+
+    def _resolve_serial_number(self):
+
+        configured_serial = str(self.serial_no or "").strip()
+        discovered_serials = self._get_discovered_serial_numbers()
+
+        if configured_serial and configured_serial in discovered_serials:
+            return configured_serial
+
+        if discovered_serials:
+            return discovered_serials[0]
+
+        if configured_serial:
+            return configured_serial
+
+        raise RuntimeError("No Thorlabs stage serial number available")
+
     #connects the actual motor to the software
     def connect(self):
 
         try:
             self.last_error = ""
-            DeviceManagerCLI.BuildDeviceList()
+            resolved_serial = self._resolve_serial_number()
+            self.serial_no = resolved_serial
 
             self.device = LongTravelStage.CreateLongTravelStage(
-                self.serial_no
+                resolved_serial
             )
 
-            print("Connect...")
-            self.device.Connect(self.serial_no)
+            print(f"Connect to Thorlabs stage {resolved_serial}...")
+            self.device.Connect(resolved_serial)
+
+            if not bool(getattr(self.device, "IsConnected", False)):
+                raise RuntimeError("Device is not connected after Connect()")
 
             time.sleep(1)
 
@@ -83,7 +132,7 @@ class StageController:
                 self.device.WaitForSettingsInitialized(10000)
 
             print("Load motor configuration...")
-            self.device.LoadMotorConfiguration(self.serial_no)
+            self.device.LoadMotorConfiguration(resolved_serial)
 
             time.sleep(1)
 
@@ -201,7 +250,7 @@ class StageController:
 # -----------------------------------------------------------------------------
 # 6. VELOCITY AND PARAMETER CONFIGURATIONS
 # -----------------------------------------------------------------------------
-    def set_velocity(self, vel=None):
+    def set_velocity(self, vel=None, acceleration_mm_s2=None):
 
         if vel is None:
             try:
@@ -214,22 +263,31 @@ class StageController:
                 print(self.last_error)
                 return self.velocity
 
+        if not self.connected:
+            self.velocity = abs(float(vel))
+            if acceleration_mm_s2 is None:
+                requested_acceleration = self.requested_acceleration
+            else:
+                requested_acceleration = abs(float(acceleration_mm_s2))
+            self.requested_acceleration = requested_acceleration
+            self.acceleration = requested_acceleration
+            return True
+
         try:
             params = self.device.GetVelocityParams()
             params.MaxVelocity = Decimal(abs(float(vel)))
 
-            try:
-                current_acceleration = float(
-                    str(params.Acceleration).replace(",", ".")
-                )
-            except Exception:
-                current_acceleration = self.acceleration
+            if acceleration_mm_s2 is None:
+                requested_acceleration = self.requested_acceleration
+            else:
+                requested_acceleration = abs(float(acceleration_mm_s2))
 
-            if self.requested_acceleration <= 0 and current_acceleration > 0:
-                self.acceleration = current_acceleration
-            elif self.acceleration <= 0:
-                self.acceleration = FALLBACK_MOVING_ACCELERATION
+            # Ensure minimum acceleration for Thorlabs hardware
+            if requested_acceleration < MIN_ACCELERATION:
+                requested_acceleration = MIN_ACCELERATION
 
+            self.requested_acceleration = requested_acceleration
+            self.acceleration = requested_acceleration
             params.Acceleration = Decimal(self.acceleration)
             self.device.SetVelocityParams(params) #send velocity command to hardware
             self.velocity = vel

@@ -34,8 +34,8 @@ import customtkinter as ctk #pythons standard UI library
 
 from PIL import Image #for showing the live camera
 
-from camera_handler import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
-from stage_controller_thor import StageController
+from handler_camera import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
+from thor_handler_stage import StageController
 
 current_directory = os.path.dirname(os.path.abspath(__file__)) #finds path of the current file, but without the filename at the end (only dirname)
 dll_path = os.path.join(current_directory, "Camera") #the ccd camera needs a certain code from Thorlabs to work, this can be found in the dll files which I added into a folder named "Camera"
@@ -57,6 +57,7 @@ FRINGE_DISTANCE_MM = (
 )
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
+DEFAULT_STAGE_SPEED_MM_S = 0.000600
 # -----------------------------------------------------------------------------
 # 3.1 COLORS AND FILTER TIMINGS
 # -----------------------------------------------------------------------------
@@ -73,6 +74,8 @@ REQUIRED_BRIGHT_FRAMES = 3
 FRINGE_COOLDOWN = 0.08
 #after calibration, 2s cooldown so that no buttons can be pressed immediately
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
+MODE = "continuous"
+CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -143,6 +146,7 @@ class InterferometerApp(ctk.CTk):
         self.camera_connected = False
         #same for the stage
         self.stage = StageController()
+        self.stage.set_velocity(DEFAULT_STAGE_SPEED_MM_S, 0.0)
         self.stage_connected = False
 
         self.laser_wavelength_nm = LASER_WAVELENGTH_NM
@@ -162,6 +166,7 @@ class InterferometerApp(ctk.CTk):
         self.returning_stage_after_calibration = False #return stage after calibration
         self.calibration_motion_started = False #prevents starting the calibration more than once
         self.calibration_button_cooldown_active = False
+        self.stage_stop_requested = False
         #header
         ctk.CTkLabel(
             self.scroll, #to separate from the next argument
@@ -241,6 +246,42 @@ class InterferometerApp(ctk.CTk):
         )
 
         self.wavelength_button.pack(pady=1)
+
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Stage speed [mm/s]",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(4, 0))
+
+        self.speed_entry = ctk.CTkEntry(
+            self.stage_frame,
+            placeholder_text="Stage speed in mm/s",
+            width=250
+        )
+
+        self.speed_entry.pack(pady=1)
+        self.speed_entry.insert(
+            0,
+            f"{DEFAULT_STAGE_SPEED_MM_S:.6f}"
+        )
+
+        self.speed_button = ctk.CTkButton(
+            self.stage_frame,
+            text="Set speed",
+            width=120,
+            command=self.apply_stage_speed,
+            fg_color=TEXT_COLOR
+        )
+
+        self.speed_button.pack(pady=1)
+
+        ctk.CTkLabel(
+            self.stage_frame,
+            text="Step size",
+            font=("Arial", 11, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(4, 0))
 
         self.step_entry = ctk.CTkEntry(
             self.stage_frame,
@@ -381,6 +422,20 @@ class InterferometerApp(ctk.CTk):
         self.btn_max.grid(
             row=0,
             column=4,
+            padx=1
+        )
+
+        self.btn_stop = ctk.CTkButton(
+            self.button_frame,
+            text="Stop",
+            width=60,
+            command=self.stop_stage,
+            fg_color=ORANGE_COLOR
+        )
+
+        self.btn_stop.grid(
+            row=0,
+            column=5,
             padx=1
         )
         #labels. for calculations of stage parameters
@@ -531,7 +586,8 @@ class InterferometerApp(ctk.CTk):
             self.btn_left,
             self.btn_center,
             self.btn_right,
-            self.btn_max
+            self.btn_max,
+            self.btn_stop
         ]
 
         self.update_comparison_labels()#renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
@@ -737,6 +793,7 @@ class InterferometerApp(ctk.CTk):
 
         self.calibrating = False
         self.calibration_motion_started = False
+        self.stage_stop_requested = False
 
         self.calibration_values = []
 
@@ -795,6 +852,10 @@ class InterferometerApp(ctk.CTk):
                 )
 
             return
+
+        self.stage_stop_requested = False
+
+        self.apply_stage_speed(update_status=False)
 
         if start_pos is None: #if no start position is given, read the current position from the stage
 
@@ -880,6 +941,10 @@ class InterferometerApp(ctk.CTk):
             )
             return
 
+        self.stage_stop_requested = False
+
+        self.apply_stage_speed(update_status=False)
+
         start_pos = self.stage.get_position()
         target_mm = self.stage.clamp_position(target_mm) #clamps target distance by the maximum movement range of the stage
 
@@ -928,7 +993,7 @@ class InterferometerApp(ctk.CTk):
             text_color=TEXT_COLOR
         )
 
-        while remaining > 1e-12:
+        while remaining > 1e-12 and not self.stage_stop_requested:
             next_step = min(step_mm, remaining)
             next_target = current_pos + direction * next_step
 
@@ -939,8 +1004,19 @@ class InterferometerApp(ctk.CTk):
                 )
                 return
 
-            while self.stage.is_moving:
+            while self.stage.is_moving and not self.stage_stop_requested:
                 time.sleep(0.01)
+
+            if self.stage_stop_requested:
+                self.after(
+                    0,
+                    lambda:
+                    self.status.configure(
+                        text="Stage stopped",
+                        text_color=ORANGE_COLOR
+                    )
+                )
+                return
 
             step_distance = abs(next_target - current_pos) #how far did this step move
             moved += step_distance #add this value to step distance
@@ -960,14 +1036,15 @@ class InterferometerApp(ctk.CTk):
             if remaining > 1e-12:
                 time.sleep(delay_s)
 
-        self.after(
-            0,
-            lambda:
-            self.status.configure(
-                text=f"Reached {current_pos:.6f} mm",
-                text_color=GREEN_COLOR
+        if not self.stage_stop_requested:
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text=f"Reached {current_pos:.6f} mm",
+                    text_color=GREEN_COLOR
+                )
             )
-        )
     # -----------------------------------------------------------------------------
     # 5.6 READ STEP SIZE FROM THE UI
     # -----------------------------------------------------------------------------
@@ -981,13 +1058,66 @@ class InterferometerApp(ctk.CTk):
             return abs(value)
         except ValueError:
             return 0.0001 #safe default size when step size invalid
+
+    def get_stage_speed(self):
+
+        try:
+            value = float(
+                self.speed_entry.get().replace(",", ".")
+            )
+            if value <= 0:
+                raise ValueError
+            return abs(value)
+
+        except ValueError:
+            return DEFAULT_STAGE_SPEED_MM_S
+
+    def apply_stage_speed(self, update_status=True):
+
+        speed_mm_s = self.get_stage_speed()
+
+        self.speed_entry.delete(0, "end")
+        self.speed_entry.insert(
+            0,
+            f"{speed_mm_s:.6f}"
+        )
+
+        if not self.stage_connected:
+            self.stage.set_velocity(speed_mm_s)
+            return True
+
+        if not self.stage.set_velocity(speed_mm_s):
+
+            if update_status:
+                error_text = (
+                    self.stage.last_error
+                    or "Could not set stage velocity"
+                )
+                self.status.configure(
+                    text=error_text,
+                    text_color=RED_COLOR
+                )
+
+            return False
+
+        if update_status:
+            self.status.configure(
+                text=f"Stage velocity set to {speed_mm_s:.6f} mm/s",
+                text_color=GREEN_COLOR
+            )
+
+        return True
+
+    def use_continuous_stage_mode(self):
+
+        return MODE.lower().startswith("c")
     # -----------------------------------------------------------------------------
     # 5.7 CALCULATE FRINGE DISTANCE
     # -----------------------------------------------------------------------------
     
     def compute_fringe_distance(self, wavelength_nm):
 
-        return (wavelength_nm / 2) / 1_000_000 
+        return (wavelength_nm / 2) / 1_000_000
     # -----------------------------------------------------------------------------
     # 5.8 APPLY A NEW LASER WAVELENGTH
     # -----------------------------------------------------------------------------
@@ -1041,9 +1171,15 @@ class InterferometerApp(ctk.CTk):
 
     def move_to_center(self):
 
-        self.start_stage_move_to_stepped( #move to center button also goes in steps
-            0.0
-        )
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_to(
+                0.0
+            )
+
+        else:
+            self.start_stage_move_to_stepped( #move to center button also goes in steps
+                0.0
+            )
 
     def step_positive(self):
 
@@ -1070,7 +1206,11 @@ class InterferometerApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_to_stepped(target_mm)
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_to(target_mm)
+
+        else:
+            self.start_stage_move_to_stepped(target_mm)
 
     def move_distance_by_steps(self):
 
@@ -1085,11 +1225,22 @@ class InterferometerApp(ctk.CTk):
             )
             return
 
-        self.start_stage_move_by_steps(distance_mm)
+        if self.use_continuous_stage_mode():
+            self.start_stage_move_by(distance_mm)
+
+        else:
+            self.start_stage_move_by_steps(distance_mm)
 
     def stop_stage(self):
 
-        self.stage.stop()
+        self.stage_stop_requested = True
+        self.status.configure(
+            text="Stopping stage...",
+            text_color=ORANGE_COLOR
+        )
+
+        if self.stage_connected:
+            self.stage.stop()
 
     # -----------------------------------------------------------------------------
     # 7.1 TRACK NORMAL STAGE MOVEMENT
@@ -1099,7 +1250,7 @@ class InterferometerApp(ctk.CTk):
         #how much did the stage move befor the current movement? use this as base
         movement_base = self.stage_movement_before_move
 
-        while self.stage.is_moving:
+        while self.stage.is_moving and not self.stage_stop_requested:
 
             pos = self.stage.get_position() #read stage position
 
@@ -1112,6 +1263,17 @@ class InterferometerApp(ctk.CTk):
             )
 
             time.sleep(0.05)
+
+        if self.stage_stop_requested:
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Stage stopped",
+                    text_color=ORANGE_COLOR
+                )
+            )
+            return
 
         pos = self.stage.get_position()
 

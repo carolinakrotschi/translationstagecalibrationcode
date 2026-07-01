@@ -711,6 +711,8 @@ class HomodyneGui:
         self.last_sample_display_time = 0.0
 
         self.stage = StageController() if StageController is not None else None
+        if self.stage is not None:
+            self.stage.set_velocity(DEFAULT_STAGE_SPEED_MM_S, 0.0)
         self.stage_connected = False
         if self.stage is not None:
             try:

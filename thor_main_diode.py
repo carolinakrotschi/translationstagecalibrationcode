@@ -167,6 +167,7 @@ class SideApp(ctk.CTk):
 
         #same for the stage
         self.stage = StageController()
+        self.stage.set_velocity(VELOCITY_MM_S, 0.0)
         self.stage_connected = self.stage.connect()
 
         #stores values for all the start positions

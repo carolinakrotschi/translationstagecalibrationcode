@@ -7,9 +7,10 @@
 # 4. InterferometerApp class
 # 5. Monitoring and reset
 # 6. Translation stage control
-# 7. Calibration 
-# 8. Camera loop
-# 9. Cleanup and program start
+# 7. Lock function
+# 8. Calibration 
+# 9. Camera loop
+# 10. Cleanup and program start
 
 # -----------------------------------------------------------------------------
 # 1. BASIC SETTINGS
@@ -34,8 +35,8 @@ import customtkinter as ctk #pythons standard UI library
 
 from PIL import Image #for showing the live camera
 
-from handler_camera import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
-from handler_stage import StageController
+from camera_handler import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
+from stage_controller import StageController
 
 current_directory = os.path.dirname(os.path.abspath(__file__)) #finds path of the current file, but without the filename at the end (only dirname)
 dll_path = os.path.join(current_directory, "Camera") #the ccd camera needs a certain code from Thorlabs to work, this can be found in the dll files which I added into a folder named "Camera"
@@ -53,6 +54,7 @@ LASER_WAVELENGTH_NM = 780.0
 FRINGE_DISTANCE_MM = (
     (LASER_WAVELENGTH_NM / 2) / 1_000_000
     #1000000 is from nm to mm
+    #second division by 2 is because in a Michelson interferometer, the stage movement causes a change in path length that is twice the stage movement, so the fringe distance corresponds to half the wavelength of the laser light
 )
 
 SPEED_OF_LIGHT_MM_PS = 0.299792458
@@ -71,6 +73,8 @@ REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
 #after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
 FRINGE_COOLDOWN = 0.08
+#avoids rapid over correction in lock mode, by waiting at least this amount of time between corrections
+LOCK_CORRECTION_COOLDOWN = 0.20
 #after calibration, 2s cooldown so that no buttons can be pressed immediately
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 #mode for target, distance and center movements: "continuous" or "stepped"
@@ -167,6 +171,13 @@ class InterferometerApp(ctk.CTk):
         self.calibration_motion_started = False #prevents starting the calibration more than once
         self.calibration_stage_stop_done = False
         self.calibration_button_cooldown_active = False
+        #for stage locking
+        self.lock_active = False #state of the position lock
+        self.lock_position_mm = 0.0
+        self.lock_reference_fringes = 0
+        self.lock_correction_active = False
+        self.lock_last_correction_time = 0
+
         #header
         ctk.CTkLabel(
             self.scroll, #to separate from the next argument
@@ -439,6 +450,26 @@ class InterferometerApp(ctk.CTk):
             column=4,
             padx=1
         )
+        #lock button to hold the current position
+        self.btn_lock = ctk.CTkButton(
+            self.stage_frame,
+            text="LOCK",
+            width=120,
+            command=self.toggle_lock,
+            fg_color=TEXT_COLOR
+        )
+
+        self.btn_lock.pack(pady=(3, 1))
+
+        self.label_lock_status = ctk.CTkLabel(
+            self.stage_frame,
+            text="Lock: off",
+            font=("Arial", 10),
+            text_color=TEXT_COLOR
+        )
+
+        self.label_lock_status.pack(pady=0)
+
         #labels. for calculations of stage parameters
         self.label_stage_position = ctk.CTkLabel(
             self.stage_frame,
@@ -589,7 +620,8 @@ class InterferometerApp(ctk.CTk):
             self.btn_left,
             self.btn_center,
             self.btn_right,
-            self.btn_max
+            self.btn_max,
+            self.btn_lock
         ]
 
         self.update_comparison_labels()#renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
@@ -716,6 +748,9 @@ class InterferometerApp(ctk.CTk):
                 )
 
                 return #stops the method
+
+            self.disable_lock(update_status=False) #disables previous lock states so start/stop begins clean
+
             if self.stage_connected:
                 self.apply_stage_speed(update_status=False)
 
@@ -776,6 +811,9 @@ class InterferometerApp(ctk.CTk):
 
             if self.stage_connected: #are stage commands available? (before stopping it)
                 self.stage.stop()
+
+            self.disable_lock(update_status=False)
+
             self.btn.configure(
                 text="START MONITORING",
                 fg_color=TEXT_COLOR
@@ -843,6 +881,15 @@ class InterferometerApp(ctk.CTk):
             self.status.configure(
                 text="Stage not connected",
                 text_color=RED_COLOR
+            )
+
+            return
+
+        if self.lock_active and not reset_after_move: #if the lock is active, we want to prevent moving the stage, unless its a reset move after calibration 
+
+            self.status.configure(
+                text="Unlock before moving stage",
+                text_color=ORANGE_COLOR
             )
 
             return
@@ -951,6 +998,13 @@ class InterferometerApp(ctk.CTk):
             self.status.configure(
                 text="Stage not connected",
                 text_color=RED_COLOR
+            )
+            return
+
+        if self.lock_active:
+            self.status.configure(
+                text="Unlock before moving stage",
+                text_color=ORANGE_COLOR
             )
             return
 
@@ -1131,7 +1185,7 @@ class InterferometerApp(ctk.CTk):
     
     def compute_fringe_distance(self, wavelength_nm):
 
-        return (wavelength_nm / 2) / 1_000_000
+        return (wavelength_nm / 2) / 1_000_000 / 2
     # -----------------------------------------------------------------------------
     # 5.8 APPLY A NEW LASER WAVELENGTH
     # -----------------------------------------------------------------------------
@@ -1260,7 +1314,279 @@ class InterferometerApp(ctk.CTk):
             text="Stage stopped manually",
             text_color=RED_COLOR
         )
+    # -----------------------------------------------------------------------------
+    # 6.1 ENABLE OR DISABLE POSITION LOCK
+    # -----------------------------------------------------------------------------
+    
+    def toggle_lock(self):
+        #get all errors
+        if self.lock_active:
+            #refuse manual step movement because lock is active
 
+            self.disable_lock()
+
+            return
+        #user has to monitor before locking
+        if not self.is_monitoring:
+
+            self.status.configure(
+                text="Start monitoring before locking",
+                text_color=ORANGE_COLOR
+            )
+
+            return
+
+        if not self.stage_connected:
+
+            self.status.configure(
+                text="Stage not connected",
+                text_color=RED_COLOR
+            )
+
+            return
+
+        if self.calibrating or self.returning_stage_after_calibration:
+
+            self.status.configure(
+                text="Wait until calibration is done",
+                text_color=ORANGE_COLOR
+            )
+
+            return
+
+        if self.stage.is_moving:
+
+            self.status.configure(
+                text="Stage is already moving",
+                text_color=ORANGE_COLOR
+            )
+
+            return
+
+        self.lock_position_mm = self.stage.get_position() #store current stage position as lock target
+        self.lock_reference_fringes = self.accumulated_fringes #remember the fringe count
+        self.lock_last_correction_time = 0 #immediately after lock starts, allow first correction
+        self.lock_correction_active = False #no other lock correction should be currently running
+        self.lock_active = True
+        self.was_dark = False #clear last dark phase so next fringe count requires fresh bright-dark circle
+        self.dark_counter = 0
+        self.bright_counter = 0
+        self.intensity_history = []
+        self.last_count_time = time.time() #restart the fringe cooldown timer
+
+        self.btn_lock.configure(
+            text="UNLOCK",
+            fg_color=GREEN_COLOR
+        )
+
+        self.label_lock_status.configure(
+            text=f"Lock: {self.lock_position_mm:.6f} mm",
+            text_color=GREEN_COLOR
+        )
+
+        self.status.configure(
+            text=f"Lock active at {self.lock_position_mm:.6f} mm",
+            text_color=GREEN_COLOR
+        )
+    # -----------------------------------------------------------------------------
+    # 6.2 CLEAR POSITION LOCK
+    # -----------------------------------------------------------------------------
+    #return everything to unlock state
+    def disable_lock(self, update_status=True):
+
+        was_correcting = self.lock_correction_active
+
+        self.lock_active = False #disable position lock
+        self.lock_correction_active = False #mark the disabeling
+
+        #stop the stage if unlocking interrupts an active correction
+        if was_correcting and self.stage_connected:
+            
+            self.stage.stop()
+
+        if hasattr(self, "btn_lock"): #hassattr=does this object have this attribute, could be the button isnt created yet
+
+            self.btn_lock.configure(
+                text="LOCK",
+                fg_color=TEXT_COLOR
+            )
+
+        if hasattr(self, "label_lock_status"):
+
+            self.label_lock_status.configure(
+                text="Lock: off",
+                text_color=TEXT_COLOR
+            )
+
+        if update_status:
+
+            self.status.configure(
+                text="Lock off",
+                text_color=TEXT_COLOR
+            )
+    # -----------------------------------------------------------------------------
+    # 6.3 LOCK TOLERANCE
+    # -----------------------------------------------------------------------------
+    
+    #extremely small drift is ignored
+    def lock_deadband_mm(self):
+
+        return max(
+            self.fringe_distance_mm / 8,
+            1e-7
+        )
+    # -----------------------------------------------------------------------------
+    # 6.4 CHECK WHETHER LOCK CORRECTION IS NEEDED
+    # -----------------------------------------------------------------------------
+    #every time a fringe gets counted, this function gets called to check if the lock was active and correction is necessary
+    def handle_lock_after_fringe(self):
+
+        if not self.lock_active: #skip lock correction logic when lock is off
+            return
+        #lock correction should only run in a stable state
+        if (
+            not self.stage_connected
+            or self.calibrating
+            or self.returning_stage_after_calibration
+            or self.lock_correction_active
+            or self.stage.is_moving
+        ):
+            return
+
+        now = time.time()
+
+        if (
+            now - self.lock_last_correction_time
+        ) < LOCK_CORRECTION_COOLDOWN:
+            return
+
+        current_pos = self.stage.get_position()
+        drift_mm = current_pos - self.lock_position_mm
+
+        if abs(drift_mm) < self.lock_deadband_mm():
+
+            self.after( #display update runs safely from the background
+                0,
+                lambda d=drift_mm:
+                self.label_lock_status.configure(
+                    text=f"Lock: no qPOS drift ({d:+.6f} mm)",
+                    text_color=GREEN_COLOR
+                )
+            )
+
+            return
+
+        self.lock_last_correction_time = now
+        self.lock_correction_active = True
+
+        if not self.stage.move_absolute(self.lock_position_mm):
+
+            self.lock_correction_active = False #mark that no lock correction currently running
+
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Lock correction failed",
+                    text_color=RED_COLOR
+                )
+            )
+
+            return
+
+        self.after(
+            0,
+            lambda d=drift_mm:
+            self.label_lock_status.configure(
+                text=f"Lock correcting ({d:+.6f} mm)",
+                text_color=ORANGE_COLOR
+            )
+        )
+
+        self.after(
+            0,
+            lambda d=drift_mm:
+            self.status.configure(
+                text=f"Lock correcting drift {d:+.6f} mm",
+                text_color=ORANGE_COLOR
+            )
+        )
+
+        threading.Thread( #start camera work etc. in the background
+            target=self.lock_correction_ui_loop,
+            daemon=True
+        ).start()
+    # -----------------------------------------------------------------------------
+    # 6.5 FOLLOW THE LOCK CORRECTION MOVEMENT WITH UI  
+    # -----------------------------------------------------------------------------
+    #as long as the stage is moving as a correction, this method reads out the current position and finds out when its done moving
+    def lock_correction_ui_loop(self):
+
+        while self.stage.is_moving:
+
+            pos = self.stage.get_position()
+
+            self.after(
+                0,
+                lambda p=pos:
+                self.label_stage_position.configure(
+                    text=f"Stage Position: {p:.6f} mm"
+                )
+            )
+
+            time.sleep(0.05)
+
+        pos = self.stage.get_position()
+        remaining_mm = pos - self.lock_position_mm
+        self.lock_correction_active = False
+
+        self.after(
+            0,
+            lambda p=pos, r=remaining_mm:
+            self.finish_lock_correction(p, r)
+        )
+    # -----------------------------------------------------------------------------
+    # 6.6 FINISH LOCK CORRECTION
+    # -----------------------------------------------------------------------------
+    #after the correction movement is done, check if the lock position was reached and update the UI accordingly, also reset the fringe counting state 
+    def finish_lock_correction(self, pos, remaining_mm):
+
+        self.label_stage_position.configure(
+            text=f"Stage Position: {pos:.6f} mm"
+        )
+        #resets all the values
+        self.was_dark = False
+        self.dark_counter = 0
+        self.bright_counter = 0
+        self.intensity_history = []
+        self.last_count_time = time.time()
+
+        if not self.lock_active:
+            return
+        #treat lock correction as successful, when remaining error is within tolerance
+        if abs(remaining_mm) <= self.lock_deadband_mm():
+
+            self.label_lock_status.configure(
+                text=f"Lock: {self.lock_position_mm:.6f} mm",
+                text_color=GREEN_COLOR
+            )
+
+            self.status.configure(
+                text="Lock correction done",
+                text_color=GREEN_COLOR
+            )
+
+        else:
+
+            self.label_lock_status.configure(
+                text=f"Lock residual: {remaining_mm:+.6f} mm",
+                text_color=ORANGE_COLOR
+            )
+
+            self.status.configure(
+                text="Lock correction has residual drift",
+                text_color=ORANGE_COLOR
+            )
     # -----------------------------------------------------------------------------
     # 7.1 TRACK NORMAL STAGE MOVEMENT
     # -----------------------------------------------------------------------------
@@ -1739,13 +2065,21 @@ class InterferometerApp(ctk.CTk):
 
                 else:
 
-                    if not self.returning_stage_after_calibration:
+                    if ( #skip correction when hardwarestate is busy
+                        not self.returning_stage_after_calibration
+                        and not self.lock_correction_active
+                    ):
                         #run fringe detector for current intensity
                         fringe_counted = (
                             self.update_accumulated_fringes(
                                 intensity
                             )
                         )
+
+                        if fringe_counted:
+
+                            self.handle_lock_after_fringe() #let lock system correct drift after a fringe event if needed
+
                 self.after(
                     0,
                     lambda v=intensity, c=fringe_counted:
