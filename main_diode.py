@@ -43,15 +43,15 @@ try: #instead of importing the dlls like in main_camera.py here we import matplo
 except ImportError:
     Figure = None
     FigureCanvasTkAgg = None
-from diode_handler import (
-    CALIBRATION_SECONDS, 
+from handler_diode import (
+    CALIBRATION_SECONDS,
     LASER_WAVELENGTH_NM,
     PHOTODIODE_CHANNEL,
     SAMPLE_INTERVAL_S,
     SingleDiodeHandler,
-    compute_fringe_distance_mm
+    compute_fringe_distance_mm,
 )
-from stage_controller import StageController
+from handler_stage import StageController
 
 # -----------------------------------------------------------------------------
 # 3. PHYSICAL CONSTANTS

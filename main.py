@@ -35,8 +35,8 @@ import customtkinter as ctk #pythons standard UI library
 
 from PIL import Image #for showing the live camera
 
-from camera_handler import CameraHandler #a part of the code got outsourced to other files camera_handler.py and stage_controller.py 
-from stage_controller import StageController
+from handler_camera import CameraHandler #a part of the code got outsourced to other files handler_camera.py and handler_stage.py
+from handler_stage import StageController
 
 current_directory = os.path.dirname(os.path.abspath(__file__)) #finds path of the current file, but without the filename at the end (only dirname)
 dll_path = os.path.join(current_directory, "Camera") #the ccd camera needs a certain code from Thorlabs to work, this can be found in the dll files which I added into a folder named "Camera"
