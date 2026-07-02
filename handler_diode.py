@@ -27,6 +27,9 @@ PHOTODIODE_SIN_CHANNEL = "Dev1/ai1"
 
 CALIBRATION_SECONDS = 5.0
 SAMPLE_INTERVAL_S = 0.005
+LASER_WAVELENGTH_NM = 787.3
+PHASE_DIRECTION_SIGN = 1
+MIN_SIGNAL_RADIUS = 0.05
 
 # -----------------------------------------------------------------------------
 # CALCULATE THE FRINGE DISTANCE

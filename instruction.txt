@@ -1,0 +1,43 @@
+Starting the software
+0. Important: ThorCam and PIMikromove are Hardware-Drivers, they need to be installed on the computer in any way
+1. install git for windows and then go to powershell and try git --version
+    1.5 you need git for sipyco
+2. install a python version that is newer than 3.10 and try python --version
+3. same with anaconda3
+4. install everything else using conda
+    4.1. in vs code do ctr shift P --> Python:select interpreter --> choose conda with python.exe
+    4.2. install pip and then pip install -r requirements.txt
+        5.5 if sipyco from git doesnt work try: python -m pip install git+https://github.com/m-labs/sipyco
+    6. install local thorlabs sdk cd "C:\Users\(username)\Desktop\translationstagecalibrationcode\thorlabs_tsi_sdk-0.0.8" C:\ProgramData\anaconda3\python -m pip install .
+    7. go to https://www.thorlabs.com/software-pages/thorcam/ and in programming interfaces install thorlabs sdk for windows
+    8. start the program :)
+5. OR install everything else using a venv
+    5.1 install a new venv
+        5.1.1 using macOs
+            python3 -m venv .venv314
+            source .venv314/bin/activate
+            python -m pip install -r requirements.txt
+            then e.g. python main.py
+        5.1.2 using windows powershell
+            py -3.14 -m venv .venv314
+            .\.venv314\Scripts\Activate.ps1
+            python -m pip install -r requirements.txt
+            then e.g. python main.py
+
+
+connecting the Hardware
+1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
+2. for the stage
+    2.1 pi stage
+        2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo
+        2.1.2 in stage_controller change self.min_position and self.max_position to 13 each (this stage has 260mm travel range)
+    2.2 thorlabs stage
+        2.2.1 go to kinesis (64bit) software and click connect
+        2.2.2 in stage_controller change self.min_position and self.max_position to 15 each (this stage has 300mm travel range)
+3. close both apps and then run the program
+
+
+
+if using photodiodes/front-back measurement
+1. download national instrument software https://www.ni.com/de/support/downloads/drivers/download.ni-daq-mx.html#590033
+2. python -m pip install nidaqmx or when still in conda environment  C:/Users/FIDOPA_3/anaconda3/python.exe -m pip install nidaqmx

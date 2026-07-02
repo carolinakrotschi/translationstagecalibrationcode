@@ -71,7 +71,7 @@ except ImportError:
     FigureCanvasTkAgg = None
 
 try:
-    from stage_controller_thor import StageController
+    from thor_handler_stage import StageController
 except Exception as stage_import_error:
     StageController = None
     STAGE_IMPORT_ERROR = str(stage_import_error)

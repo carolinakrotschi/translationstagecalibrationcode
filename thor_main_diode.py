@@ -22,17 +22,28 @@ CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
 CALIBRATION_STAGE_SPEED_MM_S = (
     2 * CALIBRATION_STAGE_DISTANCE_MM
 ) / CALIBRATION_STAGE_MOTION_SECONDS
-DEFAULT_FRINGE_AMPLITUDE_V = 0.003
-MIN_VALID_FRINGE_AMPLITUDE_V = 0.001
-MAX_VALID_FRINGE_AMPLITUDE_V = 0.010
-FRINGE_RISE_FRACTION = 0.55
-FRINGE_REARM_FRACTION = 0.20
+CALIBRATION_FORWARD_ANALYSIS_FRACTION = min(
+    0.60,
+    (CALIBRATION_STAGE_MOTION_SECONDS / 2) / CALIBRATION_SECONDS + 0.03
+)
+EXPECTED_FRINGE_AMPLITUDE_V = 0.010
+MIN_FRINGE_TO_NOISE_RATIO = 5.0
+DEFAULT_NOISE_AMPLITUDE_V = (
+    EXPECTED_FRINGE_AMPLITUDE_V / MIN_FRINGE_TO_NOISE_RATIO
+)
+DEFAULT_FRINGE_AMPLITUDE_V = EXPECTED_FRINGE_AMPLITUDE_V
+MIN_VALID_FRINGE_AMPLITUDE_V = 0.005
+MAX_VALID_FRINGE_AMPLITUDE_V = 0.020
+FRINGE_RISE_FRACTION = 0.50
+FRINGE_REARM_FRACTION = 0.25
+DARK_LEVEL_FRACTION = 0.30
+BRIGHT_LEVEL_FRACTION = 0.55
 RAW_HISTORY_LENGTH = 300
-SMOOTHING_WINDOW_LENGTH = 1
+SMOOTHING_WINDOW_LENGTH = 3
 STEP_PAUSE_S = 0.05
-REQUIRED_DARK_FRAMES = 1
-REQUIRED_BRIGHT_FRAMES = 1
-FRINGE_COOLDOWN = SAMPLE_INTERVAL_S
+REQUIRED_DARK_FRAMES = 2
+REQUIRED_BRIGHT_FRAMES = 2
+MAX_FRINGE_WIDTH_FRAMES = 15
 STAGE_STATUS_POLL_MS = 100
 
 MODE = "continuous"
@@ -68,6 +79,8 @@ from handler_diode import (
     compute_fringe_distance_mm
 )
 from thor_handler_stage import StageController
+
+FRINGE_COOLDOWN = max(0.04, MAX_FRINGE_WIDTH_FRAMES * SAMPLE_INTERVAL_S)
 
 # -----------------------------------------------------------------------------
 # 3. PHYSICAL CONSTANTS
@@ -146,6 +159,8 @@ class SideApp(ctk.CTk):
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
         self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
+        self.noise_amplitude_voltage = DEFAULT_NOISE_AMPLITUDE_V
+        self.min_count_amplitude_voltage = MIN_VALID_FRINGE_AMPLITUDE_V
         self.fringe_rise_threshold_voltage = (
             DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_RISE_FRACTION
         )
@@ -940,6 +955,10 @@ class SideApp(ctk.CTk):
 
     def finish_calibration_display(self, calibration):
 
+        extrema_samples = self.select_calibration_extrema_samples(
+            self.calibration_raw_samples
+        )
+
         (
             fringe_min_voltage,
             fringe_max_voltage,
@@ -947,7 +966,7 @@ class SideApp(ctk.CTk):
             fringe_amplitude_voltage
         ) = (
             self.find_calibration_fringe_extrema(
-                self.calibration_raw_samples
+                extrema_samples
             )
         )
 
@@ -968,11 +987,11 @@ class SideApp(ctk.CTk):
         value_range = fringe_max_voltage - fringe_min_voltage
         self.dark_threshold = (
             fringe_min_voltage
-            + value_range * 0.125
+            + value_range * DARK_LEVEL_FRACTION
         )
         self.bright_threshold = (
-            fringe_max_voltage
-            - value_range * 0.40
+            fringe_min_voltage
+            + value_range * BRIGHT_LEVEL_FRACTION
         )
 
         self.label_calibration.configure(
@@ -981,14 +1000,17 @@ class SideApp(ctk.CTk):
                 f"{fringe_min_voltage:+.6f}/"
                 f"{fringe_max_voltage:+.6f} V "
                 f"({extrema_count} extrema, "
-                f"amp {self.fringe_amplitude_voltage:.6f} V)"
+                f"amp {self.fringe_amplitude_voltage:.6f} V, "
+                f"noise {self.noise_amplitude_voltage:.6f} V)"
             ),
             text_color=GREEN_COLOR
         )
         self.label_calibration_offset.configure(
             text=(
                 f"Fringe Rise Threshold: "
-                f"{self.fringe_rise_threshold_voltage:.6f} V"
+                f"{self.fringe_rise_threshold_voltage:.6f} V, "
+                f"min amp {self.min_count_amplitude_voltage:.6f} V, "
+                f"max {MAX_FRINGE_WIDTH_FRAMES} frames"
             )
         )
         self.label_calibration_scale.configure(
@@ -1015,7 +1037,7 @@ class SideApp(ctk.CTk):
     def find_calibration_fringe_extrema(self, samples):
 
         if not samples:
-            return None, None, 0
+            return None, None, 0, DEFAULT_FRINGE_AMPLITUDE_V
 
         if len(samples) < 5:
             return (
@@ -1100,6 +1122,24 @@ class SideApp(ctk.CTk):
             DEFAULT_FRINGE_AMPLITUDE_V
         )
 
+    def select_calibration_extrema_samples(self, samples):
+
+        if (
+            not self.stage_connected
+            or len(samples) < 10
+        ):
+            return samples
+
+        forward_sample_count = int(
+            len(samples) * CALIBRATION_FORWARD_ANALYSIS_FRACTION
+        )
+        forward_sample_count = max(
+            10,
+            min(len(samples), forward_sample_count)
+        )
+
+        return samples[:forward_sample_count]
+
     def estimate_fringe_amplitude(self, extrema, fallback_amplitude):
 
         compressed_extrema = []
@@ -1129,7 +1169,7 @@ class SideApp(ctk.CTk):
                 (kind, value)
             )
 
-        amplitudes = []
+        measured_amplitudes = []
 
         for index in range(1, len(compressed_extrema)):
             previous_kind, previous_value = compressed_extrema[index - 1]
@@ -1142,12 +1182,24 @@ class SideApp(ctk.CTk):
                 current_value - previous_value
             )
 
-            if (
-                MIN_VALID_FRINGE_AMPLITUDE_V
-                <= amplitude
-                <= MAX_VALID_FRINGE_AMPLITUDE_V
-            ):
-                amplitudes.append(amplitude)
+            if amplitude <= MAX_VALID_FRINGE_AMPLITUDE_V:
+                measured_amplitudes.append(amplitude)
+
+        noise_amplitude = self.estimate_noise_amplitude(
+            measured_amplitudes
+        )
+        min_count_amplitude = max(
+            MIN_VALID_FRINGE_AMPLITUDE_V,
+            noise_amplitude * MIN_FRINGE_TO_NOISE_RATIO
+        )
+        amplitudes = [
+            amplitude
+            for amplitude in measured_amplitudes
+            if amplitude >= min_count_amplitude
+        ]
+
+        self.noise_amplitude_voltage = noise_amplitude
+        self.min_count_amplitude_voltage = min_count_amplitude
 
         if amplitudes:
             amplitudes.sort()
@@ -1158,13 +1210,40 @@ class SideApp(ctk.CTk):
             )
 
         if (
-            MIN_VALID_FRINGE_AMPLITUDE_V
+            min_count_amplitude
             <= fallback_amplitude
             <= MAX_VALID_FRINGE_AMPLITUDE_V
         ):
             return fallback_amplitude
 
         return DEFAULT_FRINGE_AMPLITUDE_V
+
+    def estimate_noise_amplitude(self, amplitudes):
+
+        if not amplitudes:
+            return DEFAULT_NOISE_AMPLITUDE_V
+
+        sorted_amplitudes = sorted(
+            amplitude
+            for amplitude in amplitudes
+            if amplitude > 0.0
+        )
+
+        if not sorted_amplitudes:
+            return DEFAULT_NOISE_AMPLITUDE_V
+
+        lower_count = max(
+            1,
+            len(sorted_amplitudes) // 3
+        )
+        estimated_noise = self.median_value(
+            sorted_amplitudes[:lower_count]
+        )
+
+        return min(
+            estimated_noise,
+            DEFAULT_NOISE_AMPLITUDE_V
+        )
 
     def median_value(self, values):
 
@@ -1192,12 +1271,16 @@ class SideApp(ctk.CTk):
             amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
 
         self.fringe_amplitude_voltage = amplitude_voltage
+        detection_amplitude_voltage = min(
+            self.fringe_amplitude_voltage,
+            EXPECTED_FRINGE_AMPLITUDE_V
+        )
         self.fringe_rise_threshold_voltage = (
-            self.fringe_amplitude_voltage
+            detection_amplitude_voltage
             * FRINGE_RISE_FRACTION
         )
         self.fringe_rearm_threshold_voltage = (
-            self.fringe_amplitude_voltage
+            detection_amplitude_voltage
             * FRINGE_REARM_FRACTION
         )
         self.fringe_trough_voltage = None
@@ -1318,12 +1401,21 @@ class SideApp(ctk.CTk):
             if smooth_voltage > self.fringe_peak_voltage:
                 self.fringe_peak_voltage = smooth_voltage
 
-            drop_from_peak = (
+            enough_drop_from_peak = (
                 self.fringe_peak_voltage
                 - smooth_voltage
-            )
+            ) >= self.fringe_rearm_threshold_voltage
+            below_dark_level = smooth_voltage <= self.dark_threshold
+            started_near_trough = (
+                self.fringe_peak_voltage
+                - self.fringe_trough_voltage
+            ) < self.fringe_rearm_threshold_voltage
 
-            if drop_from_peak >= self.fringe_rearm_threshold_voltage:
+            if (
+                enough_drop_from_peak
+                or below_dark_level
+                or started_near_trough
+            ):
                 self.dark_counter += 1
                 self.fringe_trough_voltage = min(
                     self.fringe_trough_voltage,
@@ -1348,8 +1440,11 @@ class SideApp(ctk.CTk):
             smooth_voltage
             - self.fringe_trough_voltage
         )
+        peak_is_large_enough = (
+            rise_from_trough >= self.fringe_rise_threshold_voltage
+        )
 
-        if rise_from_trough >= self.fringe_rise_threshold_voltage:
+        if peak_is_large_enough:
             self.bright_counter += 1
         else:
             self.bright_counter = 0
@@ -1470,6 +1565,10 @@ class SideApp(ctk.CTk):
         self.dark_counter = 0
         self.bright_counter = 0
         self.last_count_time = 0.0
+        self.dark_threshold = 0.0
+        self.bright_threshold = 0.0
+        self.noise_amplitude_voltage = DEFAULT_NOISE_AMPLITUDE_V
+        self.min_count_amplitude_voltage = MIN_VALID_FRINGE_AMPLITUDE_V
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
 
