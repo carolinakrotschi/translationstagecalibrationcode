@@ -30,6 +30,26 @@ RAW_HISTORY_LENGTH = 300
 STEP_PAUSE_S = 0.05
 STAGE_STATUS_POLL_MS = 100
 
+SAMPLE_INTERVAL_S = 0.005
+
+EXPECTED_FRINGE_AMPLITUDE_V = 0.010
+MIN_FRINGE_TO_NOISE_RATIO = 5.0
+DEFAULT_NOISE_AMPLITUDE_V = (
+    EXPECTED_FRINGE_AMPLITUDE_V / MIN_FRINGE_TO_NOISE_RATIO
+)
+DEFAULT_FRINGE_AMPLITUDE_V = EXPECTED_FRINGE_AMPLITUDE_V
+MIN_VALID_FRINGE_AMPLITUDE_V = 0.005
+MAX_VALID_FRINGE_AMPLITUDE_V = 0.020
+FRINGE_RISE_FRACTION = 0.50
+FRINGE_REARM_FRACTION = 0.25
+DARK_LEVEL_FRACTION = 0.30
+BRIGHT_LEVEL_FRACTION = 0.55
+SMOOTHING_WINDOW_LENGTH = 3
+REQUIRED_DARK_FRAMES = 2
+REQUIRED_BRIGHT_FRAMES = 2
+MAX_FRINGE_WIDTH_FRAMES = 15
+FRINGE_COOLDOWN = max(0.04, MAX_FRINGE_WIDTH_FRAMES * SAMPLE_INTERVAL_S)
+
 MODE = "continuous"
 VELOCITY_MM_S = 0.0006
 TOTAL_DISTANCE_MM = 13.0
@@ -38,7 +58,6 @@ VELOCITY_MM_S_STEPPED = 1.00
 STEP_SIZE_MM = 0.00001
 STEPS = 100
 
-SAMPLE_INTERVAL_S = 0.005
 UI_UPDATE_INTERVAL_S = 0.05
 
 LOCK_TRIGGER_FRINGES = 1.0
@@ -189,9 +208,13 @@ class SingleSignalFringeCounter:
         self.offset_voltage = 0.0
         self.scale_voltage = 1.0
 
-        self.fringe_amplitude_voltage = 0.003
-        self.fringe_rise_threshold_voltage = 0.003 * 0.55
-        self.fringe_rearm_threshold_voltage = 0.003 * 0.20
+        self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
+        self.fringe_rise_threshold_voltage = (
+            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_RISE_FRACTION
+        )
+        self.fringe_rearm_threshold_voltage = (
+            DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_REARM_FRACTION
+        )
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
         self.dark_threshold = 0.0
@@ -239,7 +262,7 @@ class SingleSignalFringeCounter:
                 maxima.append(curr_val)
                 extrema.append(("max", curr_val))
 
-        amplitude = 0.003
+        amplitude = DEFAULT_FRINGE_AMPLITUDE_V
         visible_amplitude = False
         if minima and maxima:
             compressed_extrema = []
@@ -272,13 +295,21 @@ class SingleSignalFringeCounter:
                 visible_amplitude = True
 
         self.fringe_amplitude_voltage = amplitude
-        self.fringe_rise_threshold_voltage = amplitude * 0.55
-        self.fringe_rearm_threshold_voltage = amplitude * 0.20
+        detection_amplitude_voltage = min(
+            self.fringe_amplitude_voltage,
+            EXPECTED_FRINGE_AMPLITUDE_V
+        )
+        self.fringe_rise_threshold_voltage = (
+            detection_amplitude_voltage * FRINGE_RISE_FRACTION
+        )
+        self.fringe_rearm_threshold_voltage = (
+            detection_amplitude_voltage * FRINGE_REARM_FRACTION
+        )
         self.fringes_visible = visible_amplitude
 
         value_range = self.max_voltage - self.min_voltage
-        self.dark_threshold = self.min_voltage + value_range * 0.125
-        self.bright_threshold = self.max_voltage - value_range * 0.40
+        self.dark_threshold = self.min_voltage + value_range * DARK_LEVEL_FRACTION
+        self.bright_threshold = self.min_voltage + value_range * BRIGHT_LEVEL_FRACTION
 
         self.reset()
 
@@ -293,29 +324,67 @@ class SingleSignalFringeCounter:
         self.accumulated_fringes = 0
 
     def update(self, voltage):
-        REQUIRED_DARK_FRAMES = 3
-        REQUIRED_BRIGHT_FRAMES = 3
-        FRINGE_COOLDOWN = 0.08
-
         self.smoothed_voltage_history.append(voltage)
-        if len(self.smoothed_voltage_history) > 5:
+        if len(self.smoothed_voltage_history) > SMOOTHING_WINDOW_LENGTH:
             self.smoothed_voltage_history.pop(0)
-        smooth_voltage = sum(self.smoothed_voltage_history) / len(self.smoothed_voltage_history)
+        smooth_voltage = (
+            sum(self.smoothed_voltage_history) / len(self.smoothed_voltage_history)
+        )
 
-        if smooth_voltage < self.dark_threshold:
-            self.dark_counter += 1
-        else:
-            self.dark_counter = 0
+        if self.fringe_trough_voltage is None:
+            self.fringe_trough_voltage = smooth_voltage
+            self.fringe_peak_voltage = smooth_voltage
+            return False
 
-        if self.dark_counter >= REQUIRED_DARK_FRAMES:
-            self.was_dark = True
+        if self.fringe_peak_voltage is None:
+            self.fringe_peak_voltage = smooth_voltage
 
-        if smooth_voltage > self.bright_threshold:
+        cooldown_ok = (time.time() - self.last_count_time) > FRINGE_COOLDOWN
+
+        if not self.was_dark:
+            if smooth_voltage > self.fringe_peak_voltage:
+                self.fringe_peak_voltage = smooth_voltage
+
+            enough_drop_from_peak = (
+                self.fringe_peak_voltage - smooth_voltage
+            ) >= self.fringe_rearm_threshold_voltage
+            below_dark_level = smooth_voltage <= self.dark_threshold
+            started_near_trough = (
+                self.fringe_peak_voltage - self.fringe_trough_voltage
+            ) < self.fringe_rearm_threshold_voltage
+
+            if (
+                enough_drop_from_peak
+                or below_dark_level
+                or started_near_trough
+            ):
+                self.dark_counter += 1
+                self.fringe_trough_voltage = min(
+                    self.fringe_trough_voltage,
+                    smooth_voltage
+                )
+            else:
+                self.dark_counter = 0
+
+            if self.dark_counter >= REQUIRED_DARK_FRAMES:
+                self.was_dark = True
+                self.fringe_trough_voltage = smooth_voltage
+                self.bright_counter = 0
+
+            return False
+
+        if smooth_voltage < self.fringe_trough_voltage:
+            self.fringe_trough_voltage = smooth_voltage
+            self.bright_counter = 0
+            return False
+
+        rise_from_trough = smooth_voltage - self.fringe_trough_voltage
+        peak_is_large_enough = rise_from_trough >= self.fringe_rise_threshold_voltage
+
+        if peak_is_large_enough:
             self.bright_counter += 1
         else:
             self.bright_counter = 0
-
-        cooldown_ok = (time.time() - self.last_count_time) > FRINGE_COOLDOWN
 
         if (
             self.was_dark
@@ -327,7 +396,10 @@ class SingleSignalFringeCounter:
             self.last_count_time = time.time()
             self.dark_counter = 0
             self.bright_counter = 0
+            self.fringe_peak_voltage = smooth_voltage
+            self.fringe_trough_voltage = smooth_voltage
             return True
+
         return False
 
 class HomodyneQuadratureCounter:
@@ -2187,6 +2259,10 @@ class HomodyneGui:
         if movement_base is None:
             movement_base = self.total_stage_movement
         current_total_stage_movement = movement_base + abs(moved)
+        self.total_stage_movement = max(
+            self.total_stage_movement,
+            current_total_stage_movement
+        )
         self.current_stage_movement_for_compare = current_total_stage_movement
 
         self.label_stage_position.configure(
