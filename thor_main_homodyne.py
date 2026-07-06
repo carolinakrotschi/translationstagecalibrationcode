@@ -194,8 +194,11 @@ class SingleSignalFringeCounter:
         self.fringe_rearm_threshold_voltage = 0.003 * 0.20
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
+        self.dark_threshold = 0.0
+        self.bright_threshold = 0.0
         self.fringes_visible = False
 
+        self.smoothed_voltage_history = []
         self.was_dark = False
         self.dark_counter = 0
         self.bright_counter = 0
@@ -272,11 +275,17 @@ class SingleSignalFringeCounter:
         self.fringe_rise_threshold_voltage = amplitude * 0.55
         self.fringe_rearm_threshold_voltage = amplitude * 0.20
         self.fringes_visible = visible_amplitude
+
+        value_range = self.max_voltage - self.min_voltage
+        self.dark_threshold = self.min_voltage + value_range * 0.125
+        self.bright_threshold = self.max_voltage - value_range * 0.40
+
         self.reset()
 
     def reset(self):
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
+        self.smoothed_voltage_history = []
         self.was_dark = False
         self.dark_counter = 0
         self.bright_counter = 0
@@ -284,56 +293,41 @@ class SingleSignalFringeCounter:
         self.accumulated_fringes = 0
 
     def update(self, voltage):
-        smooth_voltage = voltage
+        REQUIRED_DARK_FRAMES = 3
+        REQUIRED_BRIGHT_FRAMES = 3
+        FRINGE_COOLDOWN = 0.08
 
-        if self.fringe_trough_voltage is None:
-            self.fringe_trough_voltage = smooth_voltage
-            self.fringe_peak_voltage = smooth_voltage
-            return False
+        self.smoothed_voltage_history.append(voltage)
+        if len(self.smoothed_voltage_history) > 5:
+            self.smoothed_voltage_history.pop(0)
+        smooth_voltage = sum(self.smoothed_voltage_history) / len(self.smoothed_voltage_history)
 
-        if self.fringe_peak_voltage is None:
-            self.fringe_peak_voltage = smooth_voltage
+        if smooth_voltage < self.dark_threshold:
+            self.dark_counter += 1
+        else:
+            self.dark_counter = 0
 
-        cooldown_ok = (time.time() - self.last_count_time) > self.sample_interval_s
+        if self.dark_counter >= REQUIRED_DARK_FRAMES:
+            self.was_dark = True
 
-        if not self.was_dark:
-            if smooth_voltage > self.fringe_peak_voltage:
-                self.fringe_peak_voltage = smooth_voltage
-
-            drop_from_peak = self.fringe_peak_voltage - smooth_voltage
-            if drop_from_peak >= self.fringe_rearm_threshold_voltage:
-                self.dark_counter += 1
-                self.fringe_trough_voltage = min(self.fringe_trough_voltage, smooth_voltage)
-            else:
-                self.dark_counter = 0
-
-            if self.dark_counter >= 1:
-                self.was_dark = True
-                self.fringe_trough_voltage = smooth_voltage
-                self.bright_counter = 0
-            return False
-
-        if smooth_voltage < self.fringe_trough_voltage:
-            self.fringe_trough_voltage = smooth_voltage
-            self.bright_counter = 0
-            return False
-
-        rise_from_trough = smooth_voltage - self.fringe_trough_voltage
-        if rise_from_trough >= self.fringe_rise_threshold_voltage:
+        if smooth_voltage > self.bright_threshold:
             self.bright_counter += 1
         else:
             self.bright_counter = 0
 
-        if self.was_dark and self.bright_counter >= 1 and cooldown_ok:
+        cooldown_ok = (time.time() - self.last_count_time) > FRINGE_COOLDOWN
+
+        if (
+            self.was_dark
+            and self.bright_counter >= REQUIRED_BRIGHT_FRAMES
+            and cooldown_ok
+        ):
             self.accumulated_fringes += 1
             self.was_dark = False
             self.last_count_time = time.time()
             self.dark_counter = 0
             self.bright_counter = 0
-            self.fringe_peak_voltage = smooth_voltage
-            self.fringe_trough_voltage = smooth_voltage
             return True
-
         return False
 
 class HomodyneQuadratureCounter:
