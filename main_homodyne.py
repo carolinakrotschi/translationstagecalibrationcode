@@ -2168,6 +2168,8 @@ class HomodyneGui:
     def move_to_target(self):
         try:
             target_mm = self.parse_entry_float(self.target_entry)
+            if target_mm < 0:
+                raise ValueError("Target position cannot be negative")
         except ValueError:
             self.status.configure(
                 text="Invalid target value",

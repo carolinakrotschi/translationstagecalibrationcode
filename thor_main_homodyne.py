@@ -1364,13 +1364,13 @@ class HomodyneGui:
         )
         self.label_stage_status.pack(pady=2)
 
-        self.label_stage_position = ctk.CTkLabel(
+        self.label_stage_position_lock = ctk.CTkLabel(
             lock_frame,
             text="Stage position: n/a",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_stage_position.pack(pady=2)
+        self.label_stage_position_lock.pack(pady=2)
 
         self.compare_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
         self.compare_frame.pack(fill="x", pady=4, padx=8)
@@ -2105,6 +2105,8 @@ class HomodyneGui:
     def move_to_target(self):
         try:
             target_mm = self.parse_entry_float(self.target_entry)
+            if target_mm < 0:
+                raise ValueError("Target position cannot be negative")
         except ValueError:
             self.status.configure(
                 text="Invalid target value",

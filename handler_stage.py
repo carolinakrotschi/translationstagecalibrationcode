@@ -43,8 +43,8 @@ class StageController:
         self.velocity = 0.0006
         self.acceleration = 0.0
         self.is_moving = False
-        self.min_position = 0
-        self.max_position = 50
+        self.min_position = 0.0
+        self.max_position = 50.0
     #connects the actual motor to the software
     def connect(self):
 
