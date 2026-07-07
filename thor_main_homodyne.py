@@ -19,7 +19,7 @@
 PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"
 PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"
 
-CALIBRATION_SECONDS = 20.0
+CALIBRATION_SECONDS = 5.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
 CALIBRATION_STAGE_MOTION_SECONDS = CALIBRATION_SECONDS * 0.85
 CALIBRATION_STAGE_SPEED_MM_S = (
@@ -3036,12 +3036,7 @@ class HomodyneGui:
                 if self.measuring:
                     if self.calibrating:
                         if calibration_start_time is None:
-                            # Start stage motion for calibration
-                            if self.stage_connected:
-                                threading.Thread(
-                                    target=self.calibration_stage_motion,
-                                    daemon=True
-                                ).start()
+                            # No extra stage motion for calibration
                             calibration_start_time = time.time()
                             calibration_samples = []
                             self.root.after(
