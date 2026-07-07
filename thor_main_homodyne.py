@@ -3367,28 +3367,34 @@ class HomodyneGui:
             smoothed_s1.append(sum(w1) / len(w1))
             smoothed_s2.append(sum(w2) / len(w2))
 
-        self.plot_lines['circle_trace'].set_data(smoothed_s1, smoothed_s2)
+        display_window = 10
+        recent_s1 = smoothed_s1[-display_window:]
+        recent_s2 = smoothed_s2[-display_window:]
+        min_s1 = min(recent_s1) if recent_s1 else -1.0
+        max_s1 = max(recent_s1) if recent_s1 else 1.0
+        min_s2 = min(recent_s2) if recent_s2 else -1.0
+        max_s2 = max(recent_s2) if recent_s2 else 1.0
 
-        if smoothed_s1:
-            curr_x = smoothed_s1[-1]
-            curr_y = smoothed_s2[-1]
+        range_s1 = max(1e-3, max_s1 - min_s1)
+        range_s2 = max(1e-3, max_s2 - min_s2)
+
+        display_s1 = [((v - min_s1) / range_s1) * 2.0 - 1.0 for v in smoothed_s1]
+        display_s2 = [((v - min_s2) / range_s2) * 2.0 - 1.0 for v in smoothed_s2]
+
+        self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
+
+        if display_s1:
+            curr_x = display_s1[-1]
+            curr_y = display_s2[-1]
             self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
             self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
 
-            # autoscale circle axes to recent amplitude, keep a margin
-            max_extent = 0.0
-            for a, b in zip(smoothed_s1, smoothed_s2):
-                max_extent = max(max_extent, abs(a), abs(b))
+            self.axis_circle.set_xlim(-1.1, 1.1)
+            self.axis_circle.set_ylim(-1.1, 1.1)
 
-            # Choose a target axis half-range: at least 0.15 so circle fills area by default
-            target_limit = max(0.15, max_extent * 1.05)
-            self.axis_circle.set_xlim(-target_limit, target_limit)
-            self.axis_circle.set_ylim(-target_limit, target_limit)
-
-            # scale reference circle to fill most of the axes area
             if 'ref_circle' in self.plot_lines and self.plot_lines['ref_circle'] is not None:
                 theta = [t * 2 * math.pi / 100 for t in range(101)]
-                ref_r = target_limit * 0.98
+                ref_r = 1.0
                 ref_x = [ref_r * math.cos(t) for t in theta]
                 ref_y = [ref_r * math.sin(t) for t in theta]
                 try:
@@ -3396,7 +3402,6 @@ class HomodyneGui:
                 except Exception:
                     pass
 
-            # show a direction arrow only for significant movement
             if self.latest_sample is not None and self.latest_sample.direction in ["forward", "backward"]:
                 phi = math.atan2(curr_y, curr_x)
                 if self.latest_sample.direction == "forward":
@@ -3406,7 +3411,7 @@ class HomodyneGui:
                     dx, dy = math.sin(phi), -math.cos(phi)
                     color = 'red'
 
-                arrow_len = target_limit * 0.25
+                arrow_len = 0.35
                 self.plot_quiver.set_offsets([[curr_x, curr_y]])
                 self.plot_quiver.set_UVC([arrow_len * dx], [arrow_len * dy])
                 self.plot_quiver.set_color(color)
