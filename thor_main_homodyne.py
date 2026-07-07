@@ -659,7 +659,7 @@ class HomodyneMonitor:
             fringe_distance_mm=fringe_distance_mm
         )
         self.single_counter = SingleSignalFringeCounter(sample_interval_s=SAMPLE_INTERVAL_S)
-        self.s1_visibility_counter = SingleSignalFringeCounter(
+        self.s2_visibility_counter = SingleSignalFringeCounter(
             sample_interval_s=SAMPLE_INTERVAL_S
         )
 
@@ -696,11 +696,11 @@ class HomodyneMonitor:
         self.counter.calibrate_from_samples(samples)
         s1_values = [sample[0] for sample in samples]
         s2_values = [sample[1] for sample in samples]
-        self.s1_visibility_counter.calibrate(s1_values)
-        self.single_counter.calibrate(s2_values)
+        self.single_counter.calibrate(s1_values)
+        self.s2_visibility_counter.calibrate(s2_values)
         self.counter.set_signal_visibility(
-            self.s1_visibility_counter.fringes_visible,
-            self.single_counter.fringes_visible
+            self.single_counter.fringes_visible,
+            self.s2_visibility_counter.fringes_visible
         )
         return samples
 
@@ -1266,14 +1266,14 @@ class HomodyneGui:
 
         ctk.CTkLabel(
             self.single_fringe_frame,
-            text="Single-Signal Fringe Counter (Signal 2)",
+            text="Single-Signal Fringe Counter (Signal 1)",
             font=("Arial", 14, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(8, 4))
 
         self.label_single_fringes = ctk.CTkLabel(
             self.single_fringe_frame,
-            text="S2 Fringe Count: 0",
+            text="S1 Fringe Count: 0",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
@@ -1281,7 +1281,7 @@ class HomodyneGui:
 
         self.label_single_distance = ctk.CTkLabel(
             self.single_fringe_frame,
-            text="S2 Calculated Distance: 0.000000 mm",
+            text="S1 Calculated Distance: 0.000000 mm",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
@@ -2925,11 +2925,11 @@ class HomodyneGui:
             single_fringes = self.monitor.single_counter.accumulated_fringes
             single_distance = single_fringes * self.fringe_distance_mm
             single_amp = self.monitor.single_counter.fringe_amplitude_voltage
-            s1_amp = self.monitor.s1_visibility_counter.fringe_amplitude_voltage
-            s1_rise = self.monitor.s1_visibility_counter.fringe_rise_threshold_voltage
-            s2_rise = self.monitor.single_counter.fringe_rise_threshold_voltage
-            s1_visible = self.monitor.s1_visibility_counter.fringes_visible
-            s2_visible = self.monitor.single_counter.fringes_visible
+            s2_amp = self.monitor.s2_visibility_counter.fringe_amplitude_voltage
+            s1_rise = self.monitor.single_counter.fringe_rise_threshold_voltage
+            s2_rise = self.monitor.s2_visibility_counter.fringe_rise_threshold_voltage
+            s1_visible = self.monitor.single_counter.fringes_visible
+            s2_visible = self.monitor.s2_visibility_counter.fringes_visible
             lissajous_ready = self.monitor.counter.signals_visible()
 
             calibrating = self.calibrating
@@ -2942,17 +2942,17 @@ class HomodyneGui:
         elif sample is not None:
 
             self.label_single_fringes.configure(
-                text=f"S2 Fringe Count: {single_fringes}"
+                text=f"S1 Fringe Count: {single_fringes}"
             )
             self.label_single_distance.configure(
-                text=f"S2 Calculated Distance: {single_distance:+.6f} mm"
+                text=f"S1 Calculated Distance: {single_distance:+.6f} mm"
             )
             lissajous_text = "ready" if lissajous_ready else "blocked"
             self.label_single_thresholds.configure(
                 text=(
-                    f"S1 amp {s1_amp:.6f} V, rise {s1_rise:.6f} V "
+                    f"S1 amp {single_amp:.6f} V, rise {s1_rise:.6f} V "
                     f"({'visible' if s1_visible else 'not visible'}), "
-                    f"S2 amp {single_amp:.6f} V, rise {s2_rise:.6f} V "
+                    f"S2 amp {s2_amp:.6f} V, rise {s2_rise:.6f} V "
                     f"({'visible' if s2_visible else 'not visible'}), "
                     f"Lissajous {lissajous_text}"
                 )
@@ -3075,16 +3075,16 @@ class HomodyneGui:
                             self.monitor.counter.calibrate_from_samples(calibration_samples)
                             s1_vals = [s[0] for s in calibration_samples]
                             s2_vals = [s[1] for s in calibration_samples]
-                            self.monitor.s1_visibility_counter.calibrate(s1_vals)
-                            self.monitor.single_counter.calibrate(s2_vals)
+                            self.monitor.single_counter.calibrate(s1_vals)
+                            self.monitor.s2_visibility_counter.calibrate(s2_vals)
                             self.monitor.counter.set_signal_visibility(
-                                self.monitor.s1_visibility_counter.fringes_visible,
-                                self.monitor.single_counter.fringes_visible
+                                self.monitor.single_counter.fringes_visible,
+                                self.monitor.s2_visibility_counter.fringes_visible
                             )
                             
                             # Reset fringe counts to 0 starting from the end of calibration
                             self.monitor.single_counter.reset()
-                            self.monitor.s1_visibility_counter.reset()
+                            self.monitor.s2_visibility_counter.reset()
                             self.monitor.counter.reset()
 
                             # Record stage reference position at the start of measurement
@@ -3111,7 +3111,7 @@ class HomodyneGui:
                             self.lp_s1 = alpha_lp * raw_s1 + (1.0 - alpha_lp) * self.lp_s1
                             self.lp_s2 = alpha_lp * raw_s2 + (1.0 - alpha_lp) * self.lp_s2
 
-                        self.monitor.single_counter.update(self.lp_s2)
+                        self.monitor.single_counter.update(self.lp_s1)
                         sample = self.monitor.counter.update(self.lp_s1, self.lp_s2)
                         distance_mm = self.monitor.counter.signed_distance_mm()
 
@@ -3172,8 +3172,8 @@ class HomodyneGui:
             self.calibration_progress_text = f"Status: calibrating {elapsed_s:.1f}/{total_s:.1f}s..."
 
     def reset_calculation_display(self):
-        self.label_single_fringes.configure(text="S2 Fringe Count: 0")
-        self.label_single_distance.configure(text="S2 Calculated Distance: 0.000000 mm")
+        self.label_single_fringes.configure(text="S1 Fringe Count: 0")
+        self.label_single_distance.configure(text="S1 Calculated Distance: 0.000000 mm")
         self.label_single_thresholds.configure(text="Signal amplitudes: S1 = n/a, S2 = n/a")
 
         self.label_phase.configure(
@@ -3516,7 +3516,7 @@ class HomodyneGui:
     def reset_monitor(self):
         self.monitor.counter.reset()
         self.monitor.single_counter.reset()
-        self.monitor.s1_visibility_counter.reset()
+        self.monitor.s2_visibility_counter.reset()
         self.latest_sample = None
         self.latest_distance_mm = None
         self.raw_s1_history = []
