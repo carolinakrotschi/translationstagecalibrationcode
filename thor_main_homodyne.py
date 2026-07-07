@@ -559,7 +559,7 @@ class HomodyneQuadratureCounter:
             avg_delta_phase = sum(self.delta_phase_history) / len(self.delta_phase_history)
             
             # Hysteresis parameters for direction detection to avoid jitter
-            threshold = 0.02
+            threshold = 0.01
             release_threshold = 0.008
 
             if self.current_direction == "none":
