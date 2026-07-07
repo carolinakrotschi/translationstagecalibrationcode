@@ -3569,7 +3569,7 @@ class HomodyneGui:
 
         smoothed_s1 = []
         smoothed_s2 = []
-        window_size = 5
+        window_size = 15
         for i in range(len(s1_norm_history)):
             start = max(0, i - window_size + 1)
             end = i + 1
