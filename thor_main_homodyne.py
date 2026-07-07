@@ -2587,8 +2587,20 @@ class HomodyneGui:
 
     #stage movement distance is compared with distance calculated from counted fringes
     def update_comparison_labels(self, driven_mm=None):
+        if not self.measuring or self.calibrating:
+            self.label_compare_driven.configure(text="Driven: 0.000000 mm")
+            self.label_still_to_drive.configure(text="Still to drive: 0.000000 mm")
+            self.label_compare_calculated.configure(text="Calculated from Fringes: 0.000000 mm")
+            self.label_compare_difference.configure(text="Difference: 0.000000 mm", text_color=TEXT_COLOR)
+            return
+
         if driven_mm is None:
-            driven_mm = self.current_stage_movement_for_compare
+            if self.stage_connected and self.stage is not None:
+                current_pos = self.stage.current_position
+                start_pos = getattr(self, 'stage_measurement_start_position', current_pos)
+                driven_mm = abs(current_pos - start_pos)
+            else:
+                driven_mm = self.current_stage_movement_for_compare
 
         driven_distance_mm = abs(driven_mm)
         calculated_mm = 0.0
@@ -3050,8 +3062,8 @@ class HomodyneGui:
                         calibration_samples.append((raw_s1, raw_s2))
                         elapsed_s = time.time() - calibration_start_time
                         
-                        # Call handle_calibration_sample to update progress in UI
-                        self.handle_calibration_sample((raw_s1, raw_s2), elapsed_s, CALIBRATION_SECONDS)
+                        # Set progress text without double-appending raw history
+                        self.calibration_progress_text = f"Status: calibrating {elapsed_s:.1f}/{CALIBRATION_SECONDS:.1f}s..."
 
                         if elapsed_s >= CALIBRATION_SECONDS:
                             # Calibrate the counter from the collected samples
@@ -3065,6 +3077,15 @@ class HomodyneGui:
                                 self.monitor.single_counter.fringes_visible
                             )
                             
+                            # Reset fringe counts to 0 starting from the end of calibration
+                            self.monitor.single_counter.reset()
+                            self.monitor.s1_visibility_counter.reset()
+                            self.monitor.counter.reset()
+
+                            # Record stage reference position at the start of measurement
+                            if self.stage_connected and self.stage is not None:
+                                self.stage_measurement_start_position = self.stage.get_position()
+
                             self.calibrating = False
                             calibration_start_time = None
                             self.stop_calibration_stage_motion()
@@ -3089,15 +3110,16 @@ class HomodyneGui:
                     elapsed = time.time() - self.recording_start_time
                     # Non-blocking read of the last queried stage position
                     stage_pos = self.stage.current_position if (self.stage_connected and self.stage is not None) else 0.0
+                    s_obj = sample if ('sample' in locals() and sample is not None) else None
                     self.recorded_data.append((
                         elapsed,
                         raw_s1,
                         raw_s2,
-                        sample.s1,
-                        sample.s2,
-                        sample.phase_rad,
-                        sample.unwrapped_phase_rad,
-                        distance_mm if distance_mm is not None else 0.0,
+                        s_obj.s1 if s_obj else 0.0,
+                        s_obj.s2 if s_obj else 0.0,
+                        s_obj.phase_rad if s_obj else 0.0,
+                        s_obj.unwrapped_phase_rad if s_obj else 0.0,
+                        distance_mm if ('distance_mm' in locals() and distance_mm is not None) else 0.0,
                         stage_pos
                     ))
 
@@ -3567,30 +3589,42 @@ class HomodyneGui:
             s1_norm_history.append(s1)
             s2_norm_history.append(s2)
 
-        smoothed_s1 = []
-        smoothed_s2 = []
-        window_size = 15
-        for i in range(len(s1_norm_history)):
-            start = max(0, i - window_size + 1)
-            end = i + 1
-            w1 = s1_norm_history[start:end]
-            w2 = s2_norm_history[start:end]
-            smoothed_s1.append(sum(w1) / len(w1))
-            smoothed_s2.append(sum(w2) / len(w2))
+        # Compute the phase at each normalized sample
+        phases = [math.atan2(y, x) for x, y in zip(s1_norm_history, s2_norm_history)]
+        
+        # Unwrap the phases to avoid jumps during fitting
+        unwrapped_phases = []
+        if phases:
+            unwrapped_phases.append(phases[0])
+            for i in range(1, len(phases)):
+                diff = phases[i] - phases[i-1]
+                diff = (diff + math.pi) % (2 * math.pi) - math.pi
+                unwrapped_phases.append(unwrapped_phases[-1] + diff)
+        
+        # Fit a line (linear regression) to the phase of the last 20 samples to filter out noise
+        fitted_phases = list(unwrapped_phases)
+        N = 20
+        if len(unwrapped_phases) >= N:
+            sum_x = sum(float(j) for j in range(N))
+            sum_x2 = sum(float(j)**2 for j in range(N))
+            denom = N * sum_x2 - sum_x**2
+            
+            for i in range(N - 1, len(unwrapped_phases)):
+                y = unwrapped_phases[i - N + 1 : i + 1]
+                sum_y = sum(y)
+                sum_xy = sum(float(j) * y[j] for j in range(N))
+                a = (N * sum_xy - sum_x * sum_y) / denom
+                b = (sum_y - a * sum_x) / N
+                # Value at the end of the window (index N-1)
+                fitted_phases[i] = a * (N - 1) + b
 
-        display_window = 100
-        recent_s1 = smoothed_s1[-display_window:]
-        recent_s2 = smoothed_s2[-display_window:]
-        min_s1 = min(recent_s1) if recent_s1 else -1.0
-        max_s1 = max(recent_s1) if recent_s1 else 1.0
-        min_s2 = min(recent_s2) if recent_s2 else -1.0
-        max_s2 = max(recent_s2) if recent_s2 else 1.0
+        # Reconstruct the smoothed/fitted sine and cosine (perfect unit circle!)
+        smoothed_s1 = [math.cos(p) for p in fitted_phases]
+        smoothed_s2 = [math.sin(p) for p in fitted_phases]
 
-        range_s1 = max(1e-3, max_s1 - min_s1)
-        range_s2 = max(1e-3, max_s2 - min_s2)
-
-        display_s1 = [((v - min_s1) / range_s1) * 2.0 - 1.0 for v in smoothed_s1]
-        display_s2 = [((v - min_s2) / range_s2) * 2.0 - 1.0 for v in smoothed_s2]
+        # Use unit circle values directly for plotting to keep it perfectly undistorted
+        display_s1 = smoothed_s1
+        display_s2 = smoothed_s2
 
         self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
 
