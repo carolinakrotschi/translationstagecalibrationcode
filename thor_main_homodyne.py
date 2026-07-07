@@ -1904,7 +1904,7 @@ class HomodyneGui:
         if self.monitor is not None:
             self.monitor.counter.reset()
             self.monitor.single_counter.reset()
-            self.monitor.s1_visibility_counter.reset()
+            self.monitor.s2_visibility_counter.reset()
             
         if hasattr(self, 'lp_s1'):
             del self.lp_s1
