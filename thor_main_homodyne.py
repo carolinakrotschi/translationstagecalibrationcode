@@ -3000,6 +3000,8 @@ class HomodyneGui:
             self.update_comparison_labels()
 
             self.update_plot()
+        else:
+            self.update_plot()
 
         self.root.after(int(UI_UPDATE_INTERVAL_S * 1000), self.update_ui_loop)
 
