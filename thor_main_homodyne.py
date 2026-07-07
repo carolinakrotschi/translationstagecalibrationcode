@@ -795,6 +795,11 @@ class HomodyneGui:
         self.sample_display_scheduled = False
         self.last_sample_display_time = 0.0
 
+        # Data recording variables
+        self.recording = False
+        self.recorded_data = []
+        self.recording_start_time = None
+
         self.stage = StageController() if StageController is not None else None
         if self.stage is not None:
             self.stage.set_velocity(DEFAULT_STAGE_SPEED_MM_S, 0.0)
@@ -862,39 +867,50 @@ class HomodyneGui:
 
         control_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
         control_frame.pack(fill="x", padx=18, pady=8)
-        control_frame.grid_columnconfigure(0, weight=1)
+        control_frame.grid_columnconfigure(0, weight=2)
         control_frame.grid_columnconfigure(1, weight=1)
         control_frame.grid_columnconfigure(2, weight=1)
+        control_frame.grid_columnconfigure(3, weight=2)
 
         self.btn_start = ctk.CTkButton(
             control_frame,
             text="START MONITORING",
-            width=180,
+            width=150,
             command=self.toggle_monitoring,
             fg_color=TEXT_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_start.grid(row=0, column=0, padx=12, pady=14, sticky="ew")
+        self.btn_start.grid(row=0, column=0, padx=8, pady=14, sticky="ew")
 
         self.btn_lock = ctk.CTkButton(
             control_frame,
             text="LOCK",
-            width=140,
+            width=110,
             command=self.toggle_lock,
             fg_color=TEXT_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_lock.grid(row=0, column=1, padx=12, pady=14, sticky="ew")
+        self.btn_lock.grid(row=0, column=1, padx=8, pady=14, sticky="ew")
 
         self.btn_reset = ctk.CTkButton(
             control_frame,
             text="RESET",
-            width=140,
+            width=110,
             command=self.reset_monitor,
             fg_color=ORANGE_COLOR,
             font=("Arial", 12, "bold")
         )
-        self.btn_reset.grid(row=0, column=2, padx=12, pady=14, sticky="ew")
+        self.btn_reset.grid(row=0, column=2, padx=8, pady=14, sticky="ew")
+
+        self.btn_record = ctk.CTkButton(
+            control_frame,
+            text="START RECORDING",
+            width=150,
+            command=self.toggle_recording,
+            fg_color="#555555",
+            font=("Arial", 12, "bold")
+        )
+        self.btn_record.grid(row=0, column=3, padx=8, pady=14, sticky="ew")
 
         self.stage_frame = ctk.CTkFrame(
             self.scroll,
@@ -1769,6 +1785,71 @@ class HomodyneGui:
         else:
             self.start_monitoring()
 
+    def toggle_recording(self):
+        import time
+        from tkinter import messagebox
+        
+        if self.recording:
+            # Stop recording and save
+            self.recording = False
+            self.btn_record.configure(
+                text="START RECORDING",
+                fg_color="#555555"
+            )
+            self.save_recorded_data()
+        else:
+            # Start recording
+            if not self.monitoring:
+                messagebox.showwarning(
+                    "Aufnahme",
+                    "Bitte starten Sie zuerst das Monitoring (START MONITORING)."
+                )
+                return
+            
+            self.recorded_data = []
+            self.recording_start_time = time.time()
+            self.recording = True
+            self.btn_record.configure(
+                text="REC ● STOP",
+                fg_color=RED_COLOR
+            )
+
+    def save_recorded_data(self):
+        import datetime
+        import csv
+        from tkinter import filedialog, messagebox
+
+        if not self.recorded_data:
+            messagebox.showinfo("Aufnahme", "Keine Messdaten zum Speichern vorhanden.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Messdaten speichern",
+            initialfile=f"messung_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "Relative_Time_s",
+                        "Raw_S1_V",
+                        "Raw_S2_V",
+                        "Norm_S1",
+                        "Norm_S2",
+                        "Phase_rad",
+                        "Unwrapped_Phase_rad",
+                        "Calculated_Distance_mm",
+                        "Stage_Position_mm"
+                    ])
+                    writer.writerows(self.recorded_data)
+                messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
+
     # -----------------------------------------------------------------------------
     # 5.1.1 START MONITORING HELPER
     # -----------------------------------------------------------------------------
@@ -1821,6 +1902,8 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def stop_monitoring(self):
+        if self.recording:
+            self.toggle_recording()
         self.monitoring = False
         self.calibrating = False
         self.disable_lock(update_status=False)
@@ -2894,6 +2977,22 @@ class HomodyneGui:
                         self.raw_s1_history.pop(0)
                         self.raw_s2_history.pop(0)
 
+                if self.recording:
+                    elapsed = time.time() - self.recording_start_time
+                    # Non-blocking read of the last queried stage position
+                    stage_pos = self.stage.current_position if (self.stage_connected and self.stage is not None) else 0.0
+                    self.recorded_data.append((
+                        elapsed,
+                        raw_s1,
+                        raw_s2,
+                        sample.s1,
+                        sample.s2,
+                        sample.phase_rad,
+                        sample.unwrapped_phase_rad,
+                        distance_mm if distance_mm is not None else 0.0,
+                        stage_pos
+                    ))
+
                 time.sleep(SAMPLE_INTERVAL_S)
 
         except Exception as error:
@@ -3250,6 +3349,8 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def finish_stopped_ui(self):
+        if self.recording:
+            self.toggle_recording()
         self.btn_start.configure(
             text="START MONITORING",
             fg_color=TEXT_COLOR
