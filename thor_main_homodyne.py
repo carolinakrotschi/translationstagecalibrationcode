@@ -433,8 +433,6 @@ class HomodyneQuadratureCounter:
         self.s1_fringes_visible = False
         self.s2_fringes_visible = False
         self.current_direction = "none"
-        self.center_s1 = 0.0
-        self.center_s2 = 0.0
 
     def calibrate_from_samples(self, raw_samples):
         with self.lock:
@@ -450,14 +448,11 @@ class HomodyneQuadratureCounter:
             self.scale_s1 = (max(s1_values) - min(s1_values)) / 2
             self.scale_s2 = (max(s2_values) - min(s2_values)) / 2
 
-            if self.scale_s1 <= 1e-12:
-                self.scale_s1 = 1.0
+            if self.scale_s1 <= 0.0005:
+                self.scale_s1 = 0.015
 
-            if self.scale_s2 <= 1e-12:
-                self.scale_s2 = 1.0
-
-            self.center_s1 = self.offset_s1
-            self.center_s2 = self.offset_s2
+            if self.scale_s2 <= 0.0005:
+                self.scale_s2 = 0.015
 
             self._reset_unlocked()
 
@@ -487,8 +482,6 @@ class HomodyneQuadratureCounter:
         self.total_abs_fringes = 0
         self.delta_phase_history = []
         self.current_direction = "none"
-        self.center_s1 = self.offset_s1
-        self.center_s2 = self.offset_s2
 
     def normalize(self, raw_s1, raw_s2):
         s1 = (raw_s1 - self.offset_s1) / self.scale_s1
@@ -499,20 +492,8 @@ class HomodyneQuadratureCounter:
         with self.lock:
             timestamp = time.time()
 
-            # Slowly update the center tracking to follow DC drift
-            if self.center_s1 is None or self.center_s1 == 0.0:
-                self.center_s1 = raw_s1
-                self.center_s2 = raw_s2
-            else:
-                alpha = 0.002  # time constant ~ 500 samples = 2.5 seconds
-                self.center_s1 = alpha * raw_s1 + (1 - alpha) * self.center_s1
-                self.center_s2 = alpha * raw_s2 + (1 - alpha) * self.center_s2
-
-            s1_centered = (raw_s1 - self.center_s1) / (self.scale_s1 if self.scale_s1 > 1e-12 else 1.0)
-            s2_centered = (raw_s2 - self.center_s2) / (self.scale_s2 if self.scale_s2 > 1e-12 else 1.0)
-            radius = math.hypot(s1_centered, s2_centered)
-
             s1, s2 = self.normalize(raw_s1, raw_s2)
+            radius = math.hypot(s1, s2)
 
             if not self.signals_visible_unlocked():
                 return HomodyneSample(
@@ -550,7 +531,7 @@ class HomodyneQuadratureCounter:
                     valid=False
                 )
 
-            phase_rad = self.phase_direction_sign * math.atan2(s2_centered, s1_centered)
+            phase_rad = self.phase_direction_sign * math.atan2(s2, s1)
 
             if self.previous_phase_rad is None:
                 self.previous_phase_rad = phase_rad
