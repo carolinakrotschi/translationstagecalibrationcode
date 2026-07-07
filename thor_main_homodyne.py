@@ -32,6 +32,9 @@ STAGE_STATUS_POLL_MS = 100
 
 SAMPLE_INTERVAL_S = 0.005
 
+# Threshold for classifying movement direction (reduces tiny jitter being labeled)
+DIRECTION_THRESHOLD = 0.004
+
 EXPECTED_FRINGE_AMPLITUDE_V = 0.010
 MIN_FRINGE_TO_NOISE_RATIO = 5.0
 DEFAULT_NOISE_AMPLITUDE_V = (
@@ -552,7 +555,7 @@ class HomodyneQuadratureCounter:
                 self.delta_phase_history.pop(0)
 
             avg_delta_phase = sum(self.delta_phase_history) / len(self.delta_phase_history)
-            threshold = 0.001
+            threshold = DIRECTION_THRESHOLD
             if avg_delta_phase > threshold:
                 direction = "forward"
             elif avg_delta_phase < -threshold:
@@ -1263,7 +1266,15 @@ class HomodyneGui:
             ref_theta = [t * 2 * math.pi / 100 for t in range(101)]
             ref_x = [math.cos(t) for t in ref_theta]
             ref_y = [math.sin(t) for t in ref_theta]
-            self.axis_circle.plot(ref_x, ref_y, color='gray', linestyle='--', alpha=0.5, label='Ref Circle')
+            # keep a handle so we can scale the reference circle when autoscaling axes
+            self.plot_lines['ref_circle'] = self.axis_circle.plot(
+                ref_x,
+                ref_y,
+                color='gray',
+                linestyle='--',
+                alpha=0.5,
+                label='Ref Circle'
+            )[0]
 
             self.plot_lines['circle_trace'] = self.axis_circle.plot(
                 [],
@@ -3345,6 +3356,28 @@ class HomodyneGui:
             self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
             self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
 
+            # autoscale circle axes to recent amplitude, keep a margin
+            max_extent = 0.0
+            for a, b in zip(smoothed_s1, smoothed_s2):
+                max_extent = max(max_extent, abs(a), abs(b))
+
+            # Choose a target axis half-range: at least 1.0 so circle fills area by default
+            target_limit = max(1.0, max_extent)
+            self.axis_circle.set_xlim(-target_limit, target_limit)
+            self.axis_circle.set_ylim(-target_limit, target_limit)
+
+            # scale reference circle to fill most of the axes area
+            if 'ref_circle' in self.plot_lines and self.plot_lines['ref_circle'] is not None:
+                theta = [t * 2 * math.pi / 100 for t in range(101)]
+                ref_r = target_limit * 0.98
+                ref_x = [ref_r * math.cos(t) for t in theta]
+                ref_y = [ref_r * math.sin(t) for t in theta]
+                try:
+                    self.plot_lines['ref_circle'].set_data(ref_x, ref_y)
+                except Exception:
+                    pass
+
+            # show a direction arrow only for significant movement
             if self.latest_sample is not None and self.latest_sample.direction in ["forward", "backward"]:
                 phi = math.atan2(curr_y, curr_x)
                 if self.latest_sample.direction == "forward":
@@ -3354,7 +3387,7 @@ class HomodyneGui:
                     dx, dy = math.sin(phi), -math.cos(phi)
                     color = 'red'
 
-                arrow_len = 0.3
+                arrow_len = target_limit * 0.25
                 self.plot_quiver.set_offsets([[curr_x, curr_y]])
                 self.plot_quiver.set_UVC([arrow_len * dx], [arrow_len * dy])
                 self.plot_quiver.set_color(color)
