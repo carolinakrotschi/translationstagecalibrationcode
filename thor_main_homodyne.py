@@ -1115,6 +1115,7 @@ class HomodyneGui:
         self.target_button_frame.grid_columnconfigure(0, weight=1)
         self.target_button_frame.grid_columnconfigure(1, weight=1)
         self.target_button_frame.grid_columnconfigure(2, weight=1)
+        self.target_button_frame.grid_columnconfigure(3, weight=1)
 
         self.btn_target_abs = ctk.CTkButton(
             self.target_button_frame,
@@ -1134,6 +1135,15 @@ class HomodyneGui:
         )
         self.btn_target_rel.grid(row=0, column=1, padx=1, sticky="ew")
 
+        self.btn_ref_measurement = ctk.CTkButton(
+            self.target_button_frame,
+            text="Ref Measurement",
+            width=120,
+            command=self.start_ref_measurement,
+            fg_color=TEXT_COLOR
+        )
+        self.btn_ref_measurement.grid(row=0, column=2, padx=1, sticky="ew")
+
         self.btn_stop = ctk.CTkButton(
             self.target_button_frame,
             text="STOP STAGE",
@@ -1142,7 +1152,7 @@ class HomodyneGui:
             fg_color=RED_COLOR,
             font=("Arial", 11, "bold")
         )
-        self.btn_stop.grid(row=0, column=2, padx=1, sticky="ew")
+        self.btn_stop.grid(row=0, column=3, padx=1, sticky="ew")
 
         self.label_stage_position = ctk.CTkLabel(
             self.stage_frame,
@@ -2401,6 +2411,82 @@ class HomodyneGui:
             )
             return
         self.start_stage_move_by(distance_mm)
+
+    def start_ref_measurement(self):
+        from tkinter import messagebox
+        if not self.monitoring:
+            messagebox.showwarning(
+                "Messung",
+                "Bitte starten Sie zuerst das Photodioden-Monitoring (START MONITORING)."
+            )
+            return
+
+        if not self.measuring:
+            self.start_measurement()
+
+        self.btn_ref_measurement.configure(state="disabled")
+        
+        import threading
+        threading.Thread(target=self.ref_measurement_worker, daemon=True).start()
+
+    def ref_measurement_worker(self):
+        import time
+        try:
+            # 1. Wait for calibration to finish (max 6 seconds)
+            start_wait = time.time()
+            while self.calibrating and (time.time() - start_wait < 6.0):
+                time.sleep(0.1)
+
+            # If measurement was stopped, abort
+            if not self.measuring:
+                return
+
+            # 2. Start recording
+            self.root.after(0, lambda: self.start_recording_for_ref())
+            time.sleep(0.5)
+
+            # 3. Move 0.01 mm forward
+            self.root.after(0, lambda: self.start_stage_move_by(0.01))
+            time.sleep(0.2)
+
+            # Wait until stage is done moving
+            while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                time.sleep(0.05)
+
+            time.sleep(0.5)
+
+            # 4. Move 0.01 mm backward
+            self.root.after(0, lambda: self.start_stage_move_by(-0.01))
+            time.sleep(0.2)
+
+            # Wait until stage is done moving
+            while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                time.sleep(0.05)
+
+            time.sleep(0.5)
+
+            # 5. Stop recording and save
+            self.root.after(0, lambda: self.stop_recording_and_save_for_ref())
+
+        finally:
+            self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
+
+    def start_recording_for_ref(self):
+        self.recorded_data = []
+        self.recording_start_time = time.time()
+        self.recording = True
+        self.btn_record.configure(
+            text="REC ● STOP",
+            fg_color=RED_COLOR
+        )
+
+    def stop_recording_and_save_for_ref(self):
+        self.recording = False
+        self.btn_record.configure(
+            text="START RECORDING",
+            fg_color="#555555"
+        )
+        self.save_recorded_data()
 
     # -----------------------------------------------------------------------------
     # 5.9.7 STOP STAGE ACTION
