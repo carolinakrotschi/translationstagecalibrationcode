@@ -2441,6 +2441,13 @@ class HomodyneGui:
             if not self.measuring:
                 return
 
+            # Stop the stage if it is currently moving (e.g. from calibration phase)
+            if self.stage_connected and self.stage is not None and self.stage.is_moving:
+                self.root.after(0, lambda: self.stop_stage())
+                time.sleep(0.5)
+                while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                    time.sleep(0.05)
+
             # 2. Start recording
             self.root.after(0, lambda: self.start_recording_for_ref())
             time.sleep(0.5)
