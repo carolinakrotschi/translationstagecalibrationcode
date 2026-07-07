@@ -432,6 +432,7 @@ class HomodyneQuadratureCounter:
         self.total_abs_fringes = 0
         self.s1_fringes_visible = False
         self.s2_fringes_visible = False
+        self.current_direction = "none"
 
     def calibrate_from_samples(self, raw_samples):
         with self.lock:
@@ -480,6 +481,7 @@ class HomodyneQuadratureCounter:
         self.signed_fringes = 0
         self.total_abs_fringes = 0
         self.delta_phase_history = []
+        self.current_direction = "none"
 
     def normalize(self, raw_s1, raw_s2):
         s1 = (raw_s1 - self.offset_s1) / self.scale_s1
@@ -551,17 +553,34 @@ class HomodyneQuadratureCounter:
             self.signed_fringes = new_signed_fringes
 
             self.delta_phase_history.append(delta_phase_rad)
-            if len(self.delta_phase_history) > 15:
+            if len(self.delta_phase_history) > 120:
                 self.delta_phase_history.pop(0)
 
             avg_delta_phase = sum(self.delta_phase_history) / len(self.delta_phase_history)
-            threshold = DIRECTION_THRESHOLD
-            if avg_delta_phase > threshold:
-                direction = "forward"
-            elif avg_delta_phase < -threshold:
-                direction = "backward"
-            else:
-                direction = "none"
+            
+            # Hysteresis parameters for direction detection to avoid jitter
+            threshold = 0.02
+            release_threshold = 0.008
+
+            if self.current_direction == "none":
+                if avg_delta_phase > threshold:
+                    self.current_direction = "forward"
+                elif avg_delta_phase < -threshold:
+                    self.current_direction = "backward"
+            elif self.current_direction == "forward":
+                if avg_delta_phase < release_threshold:
+                    if avg_delta_phase < -threshold:
+                        self.current_direction = "backward"
+                    else:
+                        self.current_direction = "none"
+            elif self.current_direction == "backward":
+                if avg_delta_phase > -release_threshold:
+                    if avg_delta_phase > threshold:
+                        self.current_direction = "forward"
+                    else:
+                        self.current_direction = "none"
+
+            direction = self.current_direction
 
             return HomodyneSample(
                 timestamp=timestamp,
@@ -1308,7 +1327,7 @@ class HomodyneGui:
             )
             self.plot_quiver.set_visible(False)
 
-            self.axis_circle.legend(loc="upper right")
+            # self.axis_circle.legend(loc="upper right")
             self.plot_figure_circle.tight_layout()
             self.plot_canvas_circle = FigureCanvasTkAgg(
                 self.plot_figure_circle,
@@ -1333,7 +1352,7 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_phase.pack(pady=2)
+        # self.label_phase.pack(pady=2)
 
         self.label_s1_norm = ctk.CTkLabel(
             values_frame,
@@ -1341,7 +1360,7 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_s1_norm.pack(pady=2)
+        # self.label_s1_norm.pack(pady=2)
 
         self.label_s2_norm = ctk.CTkLabel(
             values_frame,
@@ -1349,7 +1368,7 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_s2_norm.pack(pady=2)
+        # self.label_s2_norm.pack(pady=2)
 
         self.label_unwrapped_phase = ctk.CTkLabel(
             values_frame,
@@ -1357,7 +1376,7 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_unwrapped_phase.pack(pady=2)
+        # self.label_unwrapped_phase.pack(pady=2)
 
         self.label_fringe_position = ctk.CTkLabel(
             values_frame,
@@ -1365,7 +1384,7 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_fringe_position.pack(pady=2)
+        # self.label_fringe_position.pack(pady=2)
 
         self.label_fringes = ctk.CTkLabel(
             values_frame,
@@ -1373,15 +1392,15 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_fringes.pack(pady=2)
+        # self.label_fringes.pack(pady=2)
 
         self.label_direction = ctk.CTkLabel(
             values_frame,
             text="Direction: Still",
-            font=("Arial", 12),
+            font=("Arial", 16, "bold"),
             text_color=TEXT_COLOR
         )
-        self.label_direction.pack(pady=2)
+        self.label_direction.pack(pady=10)
 
         self.label_distance = ctk.CTkLabel(
             values_frame,
@@ -1389,10 +1408,10 @@ class HomodyneGui:
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.label_distance.pack(pady=2)
+        # self.label_distance.pack(pady=2)
 
         lock_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
-        lock_frame.pack(fill="x", pady=4, padx=8)
+        # lock_frame.pack(fill="x", pady=4, padx=8)
 
         ctk.CTkLabel(
             lock_frame,
@@ -3361,8 +3380,8 @@ class HomodyneGui:
             for a, b in zip(smoothed_s1, smoothed_s2):
                 max_extent = max(max_extent, abs(a), abs(b))
 
-            # Choose a target axis half-range: at least 1.0 so circle fills area by default
-            target_limit = max(1.0, max_extent)
+            # Choose a target axis half-range: at least 0.15 so circle fills area by default
+            target_limit = max(0.15, max_extent * 1.05)
             self.axis_circle.set_xlim(-target_limit, target_limit)
             self.axis_circle.set_ylim(-target_limit, target_limit)
 
