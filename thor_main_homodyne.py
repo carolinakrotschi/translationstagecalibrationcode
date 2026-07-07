@@ -818,6 +818,10 @@ class HomodyneGui:
         self.recording = False
         self.recorded_data = []
         self.recording_start_time = None
+        
+        # Measurement state variables
+        self.measuring = False
+        self.calibrating = False
 
         self.stage = StageController() if StageController is not None else None
         if self.stage is not None:
@@ -1548,6 +1552,15 @@ class HomodyneGui:
         )
         self.label_compare_difference.pack(pady=2)
 
+        self.btn_measurement = ctk.CTkButton(
+            self.compare_frame,
+            text="START MEASUREMENT",
+            command=self.toggle_measurement,
+            fg_color=TEXT_COLOR,
+            font=("Arial", 12, "bold")
+        )
+        self.btn_measurement.pack(pady=(6, 10))
+
         channel_text = (
             f"Channels: S1={PHOTODIODE_CHANNEL_S1}, "
             f"S2={PHOTODIODE_CHANNEL_S2}"
@@ -1869,6 +1882,59 @@ class HomodyneGui:
             except Exception as e:
                 messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
 
+    def toggle_measurement(self):
+        from tkinter import messagebox
+        if not self.monitoring:
+            messagebox.showwarning(
+                "Messung",
+                "Bitte starten Sie zuerst das Photodioden-Monitoring (START MONITORING)."
+            )
+            return
+
+        if self.measuring:
+            # Stop measurement
+            self.stop_measurement()
+        else:
+            # Start measurement
+            self.start_measurement()
+
+    def start_measurement(self):
+        self.recorded_data = []  # Clear recorded data if any
+        # Reset counters
+        if self.monitor is not None:
+            self.monitor.counter.reset()
+            self.monitor.single_counter.reset()
+            self.monitor.s1_visibility_counter.reset()
+            
+        self.latest_sample = None
+        self.latest_distance_mm = None
+        self.reset_calculation_display()
+        
+        self.measuring = True
+        self.calibrating = True
+        
+        self.btn_measurement.configure(
+            text="STOP MEASUREMENT",
+            fg_color=RED_COLOR
+        )
+
+    def stop_measurement(self):
+        self.measuring = False
+        self.calibrating = False
+        self.stop_calibration_stage_motion()
+        
+        # Reset UI button
+        self.btn_measurement.configure(
+            text="START MEASUREMENT",
+            fg_color=TEXT_COLOR
+        )
+        
+        # Reset UI status
+        self.status.configure(
+            text="Status: monitoring running",
+            text_color=GREEN_COLOR
+        )
+
     # -----------------------------------------------------------------------------
     # 5.1.1 START MONITORING HELPER
     # -----------------------------------------------------------------------------
@@ -1884,7 +1950,8 @@ class HomodyneGui:
             wavelength_nm=self.laser_wavelength_nm
         )
         self.monitoring = True
-        self.calibrating = True
+        self.calibrating = False
+        self.measuring = False
         self.latest_sample = None
         self.latest_distance_mm = None
         self.last_error_text = None
@@ -1908,7 +1975,7 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
 
-        self.set_buttons_enabled(False)
+        self.set_buttons_enabled(True)
 
         self.measurement_thread = threading.Thread(
             target=self.measurement_loop,
@@ -1923,6 +1990,8 @@ class HomodyneGui:
     def stop_monitoring(self):
         if self.recording:
             self.toggle_recording()
+        if self.measuring:
+            self.stop_measurement()
         self.monitoring = False
         self.calibrating = False
         self.disable_lock(update_status=False)
@@ -2942,59 +3011,82 @@ class HomodyneGui:
                 0,
                 lambda:
                 self.status.configure(
-                    text=(
-                        f"Status: calibrating "
-                        f"{CALIBRATION_SECONDS:.1f}s..."
-                    ),
-                    text_color=ORANGE_COLOR
-                )
-            )
-
-            if self.stage_connected:
-                threading.Thread(
-                    target=self.calibration_stage_motion,
-                    daemon=True
-                ).start()
-
-            self.root.after(0, self.start_ui_loop)
-
-            calibration = self.monitor.calibrate(
-                seconds=CALIBRATION_SECONDS,
-                sample_interval_s=SAMPLE_INTERVAL_S,
-                should_continue=lambda: self.monitoring,
-                sample_callback=self.handle_calibration_sample
-            )
-
-            if not self.monitoring:
-                return
-
-            self.calibrating = False
-            self.stop_calibration_stage_motion()
-
-            self.root.after(
-                0,
-                lambda:
-                self.status.configure(
                     text="Status: monitoring running",
                     text_color=GREEN_COLOR
                 )
             )
 
+            self.root.after(0, self.start_ui_loop)
+
+            calibration_samples = []
+            calibration_start_time = None
+
             while self.monitoring:
                 raw_s1, raw_s2 = self.monitor.reader.read()
 
-                self.monitor.single_counter.update(raw_s2)
-                sample = self.monitor.counter.update(raw_s1, raw_s2)
-                distance_mm = self.monitor.counter.signed_distance_mm()
-
                 with self.sample_display_lock:
-                    self.latest_sample = sample
-                    self.latest_distance_mm = distance_mm
                     self.raw_s1_history.append(raw_s1)
                     self.raw_s2_history.append(raw_s2)
                     if len(self.raw_s1_history) > 300:
                         self.raw_s1_history.pop(0)
                         self.raw_s2_history.pop(0)
+
+                if self.measuring:
+                    if self.calibrating:
+                        if calibration_start_time is None:
+                            # Start stage motion for calibration
+                            if self.stage_connected:
+                                threading.Thread(
+                                    target=self.calibration_stage_motion,
+                                    daemon=True
+                                ).start()
+                            calibration_start_time = time.time()
+                            calibration_samples = []
+                            self.root.after(
+                                0,
+                                lambda: self.status.configure(
+                                    text=f"Status: calibrating {CALIBRATION_SECONDS:.1f}s...",
+                                    text_color=ORANGE_COLOR
+                                )
+                            )
+
+                        calibration_samples.append((raw_s1, raw_s2))
+                        elapsed_s = time.time() - calibration_start_time
+                        
+                        # Call handle_calibration_sample to update progress in UI
+                        self.handle_calibration_sample((raw_s1, raw_s2), elapsed_s, CALIBRATION_SECONDS)
+
+                        if elapsed_s >= CALIBRATION_SECONDS:
+                            # Calibrate the counter from the collected samples
+                            self.monitor.counter.calibrate_from_samples(calibration_samples)
+                            s1_vals = [s[0] for s in calibration_samples]
+                            s2_vals = [s[1] for s in calibration_samples]
+                            self.monitor.s1_visibility_counter.calibrate(s1_vals)
+                            self.monitor.single_counter.calibrate(s2_vals)
+                            self.monitor.counter.set_signal_visibility(
+                                self.monitor.s1_visibility_counter.fringes_visible,
+                                self.monitor.single_counter.fringes_visible
+                            )
+                            
+                            self.calibrating = False
+                            calibration_start_time = None
+                            self.stop_calibration_stage_motion()
+                            self.root.after(
+                                0,
+                                lambda: self.status.configure(
+                                    text="Status: measurement running",
+                                    text_color=GREEN_COLOR
+                                )
+                            )
+                    else:
+                        # Calibration is complete, do normal fringe counting
+                        self.monitor.single_counter.update(raw_s2)
+                        sample = self.monitor.counter.update(raw_s1, raw_s2)
+                        distance_mm = self.monitor.counter.signed_distance_mm()
+
+                        with self.sample_display_lock:
+                            self.latest_sample = sample
+                            self.latest_distance_mm = distance_mm
 
                 if self.recording:
                     elapsed = time.time() - self.recording_start_time
@@ -3370,6 +3462,8 @@ class HomodyneGui:
     def finish_stopped_ui(self):
         if self.recording:
             self.toggle_recording()
+        if self.measuring:
+            self.stop_measurement()
         self.btn_start.configure(
             text="START MONITORING",
             fg_color=TEXT_COLOR
@@ -3453,7 +3547,7 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
 
-        if not self.monitor.counter.signals_visible():
+        if not self.measuring or not self.monitor.counter.signals_visible():
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
