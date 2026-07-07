@@ -110,8 +110,8 @@ SPEED_OF_LIGHT_MM_PS = 0.299792458
 PHASE_DIRECTION_SIGN = 1
 
 MIN_SIGNAL_RADIUS = 0.05
-MIN_VISIBLE_FRINGE_AMPLITUDE_V = 0.001
-MAX_VISIBLE_FRINGE_AMPLITUDE_V = 0.010
+MIN_VISIBLE_FRINGE_AMPLITUDE_V = 0.004
+MAX_VISIBLE_FRINGE_AMPLITUDE_V = 0.060
 
 DEFAULT_STAGE_SPEED_MM_S = 0.000600
 def compute_fringe_distance_mm(wavelength_nm):
@@ -1887,6 +1887,11 @@ class HomodyneGui:
             self.monitor.single_counter.reset()
             self.monitor.s1_visibility_counter.reset()
             
+        if hasattr(self, 'lp_s1'):
+            del self.lp_s1
+        if hasattr(self, 'lp_s2'):
+            del self.lp_s2
+
         self.latest_sample = None
         self.latest_distance_mm = None
         self.reset_calculation_display()
@@ -3079,8 +3084,16 @@ class HomodyneGui:
                             )
                     else:
                         # Calibration is complete, do normal fringe counting
-                        self.monitor.single_counter.update(raw_s2)
-                        sample = self.monitor.counter.update(raw_s1, raw_s2)
+                        alpha_lp = 0.3
+                        if not hasattr(self, 'lp_s1'):
+                            self.lp_s1 = raw_s1
+                            self.lp_s2 = raw_s2
+                        else:
+                            self.lp_s1 = alpha_lp * raw_s1 + (1.0 - alpha_lp) * self.lp_s1
+                            self.lp_s2 = alpha_lp * raw_s2 + (1.0 - alpha_lp) * self.lp_s2
+
+                        self.monitor.single_counter.update(self.lp_s2)
+                        sample = self.monitor.counter.update(self.lp_s1, self.lp_s2)
                         distance_mm = self.monitor.counter.signed_distance_mm()
 
                         with self.sample_display_lock:
