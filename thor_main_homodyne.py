@@ -3367,7 +3367,7 @@ class HomodyneGui:
             smoothed_s1.append(sum(w1) / len(w1))
             smoothed_s2.append(sum(w2) / len(w2))
 
-        display_window = 10
+        display_window = 100
         recent_s1 = smoothed_s1[-display_window:]
         recent_s2 = smoothed_s2[-display_window:]
         min_s1 = min(recent_s1) if recent_s1 else -1.0
@@ -3389,8 +3389,13 @@ class HomodyneGui:
             self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
             self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
 
-            self.axis_circle.set_xlim(-1.1, 1.1)
-            self.axis_circle.set_ylim(-1.1, 1.1)
+            # Ensure the axes limits are always a bit larger than the actual plotted values
+            max_extent = 1.0
+            if display_s1 and display_s2:
+                max_extent = max(max(abs(v) for v in display_s1), max(abs(v) for v in display_s2), 1.0)
+            target_limit = max_extent * 1.15
+            self.axis_circle.set_xlim(-target_limit, target_limit)
+            self.axis_circle.set_ylim(-target_limit, target_limit)
 
             if 'ref_circle' in self.plot_lines and self.plot_lines['ref_circle'] is not None:
                 theta = [t * 2 * math.pi / 100 for t in range(101)]
