@@ -3467,16 +3467,6 @@ class HomodyneGui:
             text_color=ORANGE_COLOR if abs(drift_mm) > 0 else GREEN_COLOR
         )
 
-        if sample.fringe_delta != 0:
-            self.status.configure(
-                text=(
-                    f"Status: lock saw fringe "
-                    f"{sample.fringe_delta:+d}, "
-                    f"correction {correction_mm:+.9f} mm"
-                ),
-                text_color=ORANGE_COLOR
-            )
-
         self.maybe_start_lock_correction(drift_mm, correction_mm, sample)
 
     #extremely small drift is ignored
@@ -3502,27 +3492,33 @@ class HomodyneGui:
             )
             return
 
-        if (
-            self.lock_correction_active
-            or self.stage_command_active
-            or self.stage.is_moving
-        ):
-            return
-
-        # Check if a fringe was counted
-        # "wenn ein fringe gezählt wird..."
         if sample is None or sample.signed_fringes == 0:
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text="Lock Status: active",
+                    text_color=GREEN_COLOR
+                )
             return
 
         fringe_distance_mm = self.monitor.counter.fringe_distance_mm
         if fringe_distance_mm is None:
             fringe_distance_mm = 0.000316
 
-        # Check if direction is detected
-        # "wenn fringes detektiert und keine richtung detektiert schreibe: fringe but still, so no correction"
+        fringes_str = f"+{sample.signed_fringes}" if sample.signed_fringes > 0 else f"{sample.signed_fringes}"
+
+        # 1. Check if deviation is below threshold
+        if abs(sample.signed_fringes) < LOCK_TRIGGER_FRINGES:
+            msg = f"{fringes_str} fringe, but below threshold so didnt count"
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text=f"Lock Status: {msg}",
+                    text_color=ORANGE_COLOR
+                )
+            return
+
+        # 2. Check invalid direction
         if sample.direction not in ["forward", "backward"]:
-            fringes_str = f"+{sample.signed_fringes}" if sample.signed_fringes > 0 else f"{sample.signed_fringes}"
-            msg = f"{fringes_str} fringe{'s' if abs(sample.signed_fringes) != 1 else ''}, but still, so no correction"
+            msg = f"{fringes_str} fringe but still, so no correction"
             self.label_lock_status.configure(
                 text=f"Lock: {msg}",
                 text_color=ORANGE_COLOR
@@ -3532,25 +3528,39 @@ class HomodyneGui:
                     text=f"Lock Status: {msg}",
                     text_color=ORANGE_COLOR
                 )
-            self.status.configure(
-                text=f"Status: {msg}",
-                text_color=ORANGE_COLOR
-            )
             return
 
-        now = time.time()
+        # 3. Check busy state
+        if (
+            self.lock_correction_active
+            or self.stage_command_active
+            or self.stage.is_moving
+        ):
+            msg = f"{fringes_str} fringe but still, so no correction"
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text=f"Lock Status: {msg}",
+                    text_color=ORANGE_COLOR
+                )
+            return
 
+        # 4. Check cooldown
+        now = time.time()
         if now - self.lock_last_correction_time < LOCK_CORRECTION_COOLDOWN_S:
+            msg = f"{fringes_str} fringe but still, so no correction"
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text=f"Lock Status: {msg}",
+                    text_color=ORANGE_COLOR
+                )
             return
 
         # Determine the corrective step (opposite to the drift to apply true negative feedback)
         # Drift (+) -> correction (-)
         # Drift (-) -> correction (+)
-        # "dann mache die entgegengesetzte bewegung aber habe die position auf der ich locke gespeichert..."
         correction_step_mm = - (sample.signed_fringes * fringe_distance_mm)
         
         # Clamp the correction step to a maximum of 2 fringes (0.0008 mm) from the lock position
-        # "die stage darf nie mehr als 2 fringes auf einmal kompensieren also nie mehr als 0.0008mm vom lock position weg"
         max_lock_deviation_mm = 0.0008
         if correction_step_mm > max_lock_deviation_mm:
             correction_step_mm = max_lock_deviation_mm
@@ -3563,18 +3573,6 @@ class HomodyneGui:
         )
         current_position_mm = self.stage.get_position()
         actual_correction_mm = target_position_mm - current_position_mm
-
-        # Determine drift and correction directions for text display
-        if sample.signed_fringes > 0:
-            drift_dir = "forward"
-            corr_dir = "backward"
-            fringes_str = f"+{sample.signed_fringes}"
-        else:
-            drift_dir = "backward"
-            corr_dir = "forward"
-            fringes_str = f"{sample.signed_fringes}"
-
-        msg = f"{fringes_str} fringe{'s' if abs(sample.signed_fringes) != 1 else ''}, direction {drift_dir}, correcting {abs(correction_step_mm):.6f} mm {corr_dir}"
 
         if abs(actual_correction_mm) < 1e-12:
             self.label_lock_status.configure(
@@ -3603,6 +3601,9 @@ class HomodyneGui:
                     text_color=RED_COLOR
                 )
             return
+
+        # Success message format: "+1 fringe corrected by -0.000316 mm"
+        msg = f"{fringes_str} fringe corrected by {correction_step_mm:+.6f} mm"
 
         self.label_lock_status.configure(
             text=f"Lock: {msg}",
@@ -3674,10 +3675,6 @@ class HomodyneGui:
         )
         self.label_lock_status.configure(
             text="Lock: correction done",
-            text_color=GREEN_COLOR
-        )
-        self.status.configure(
-            text="Status: lock correction done",
             text_color=GREEN_COLOR
         )
 
