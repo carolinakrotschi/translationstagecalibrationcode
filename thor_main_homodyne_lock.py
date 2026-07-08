@@ -1834,6 +1834,13 @@ class HomodyneGui:
 
     def toggle_measurement(self):
         from tkinter import messagebox
+        if self.lock_active:
+            messagebox.showwarning(
+                "Messung",
+                "Messung kann nicht gestartet werden, da der Lock aktiv ist."
+            )
+            return
+
         if not self.monitoring:
             messagebox.showwarning(
                 "Messung",
@@ -2039,6 +2046,13 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def prepare_stage_for_move(self):
+        if self.lock_active:
+            self.status.configure(
+                text="Stage-Bewegung blockiert: Lock ist aktiv.",
+                text_color=RED_COLOR
+            )
+            return False
+
         if not self.stage_connected or self.stage is None:
             self.status.configure(
                 text="Stage not connected",
@@ -3514,6 +3528,14 @@ class HomodyneGui:
         # "dann mache die entgegengesetzte bewegung aber habe die position auf der ich locke gespeichert..."
         correction_step_mm = - (sample.signed_fringes * fringe_distance_mm)
         
+        # Clamp the correction step to a maximum of 2 fringes (0.0008 mm) from the lock position
+        # "die stage darf nie mehr als 2 fringes auf einmal kompensieren also nie mehr als 0.0008mm vom lock position weg"
+        max_lock_deviation_mm = 0.0008
+        if correction_step_mm > max_lock_deviation_mm:
+            correction_step_mm = max_lock_deviation_mm
+        elif correction_step_mm < -max_lock_deviation_mm:
+            correction_step_mm = -max_lock_deviation_mm
+        
         # Calculate target relative to the saved lock position reference (not current_position_mm)
         target_position_mm = self.stage.clamp_position(
             self.lock_stage_position_mm + correction_step_mm
@@ -3545,7 +3567,6 @@ class HomodyneGui:
                 )
             return
 
-        self.lock_last_correction_time = now
         self.lock_correction_active = True
         self.lock_target_position_mm = target_position_mm
 
@@ -3615,6 +3636,7 @@ class HomodyneGui:
 
     def finish_lock_correction(self, position_mm):
         self.lock_correction_active = False
+        self.lock_last_correction_time = time.time()
 
         if position_mm is not None:
             self.stage_position_mm = position_mm
