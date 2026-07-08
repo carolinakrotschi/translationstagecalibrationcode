@@ -1,0 +1,244 @@
+================================================================================
+EXPLANATION OF DIFFERENCES BETWEEN DIODE, HOMODYNE, AND HOMODYNE LOCK PROGRAMS
+================================================================================
+
+This document provides a detailed point-by-point explanation comparing three versions
+of the Thorlabs translation stage calibration software:
+  1. `thor_main_diode.py` (Single photodiode fringe counting)
+  2. `thor_main_homodyne.py` (Quadrature/Homodyne phase-unwrapping interferometer)
+  3. `thor_main_homodyne_lock.py` (Closed-loop position locking homodyne interferometer)
+
+For each point, we explain what it does conceptually, what makes it unique, and how
+it is implemented in the Python code with line/class/method references.
+
+--------------------------------------------------------------------------------
+1. HARDWARE CHANNELS & SIGNAL MODEL
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Diode: Only measures a single photodiode channel. Since it is a single cosine-
+    like signal, it has no phase-quadrature information and cannot distinguish 
+    which way the stage is moving.
+  - Homodyne/Lock: Reads two photodiode channels (S1 and S2) aligned in quadrature
+    (90-degree phase shift, yielding sine and cosine waves). This allows plotting
+    a circular trajectory (Lissajous) and tracking the actual phase angle.
+
+* CODE IMPLEMENTATION:
+  - In `thor_main_diode.py`:
+    - Only reads one DAQ analog input channel (`PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"`).
+    - The DAQ reader class `DAQReader` (lines 400-550) has a single-channel configuration:
+      `self.task.ai_channels.add_ai_voltage_chan(channel)`
+    - The main data collection read call (`read(self)`) returns only one raw float voltage:
+      `return float(data[0])`
+  - In `thor_main_homodyne.py` and `thor_main_homodyne_lock.py`:
+    - Configures two channels (`PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"`, `PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"`).
+    - The DAQ task configuration adds both channels, and the `read(self)` call returns a tuple:
+      `return float(data[0][0]), float(data[1][0])`
+
+--------------------------------------------------------------------------------
+2. ARCHITECTURAL ABSTRACTION & MODULARITY (OOP vs. MONOLITHIC)
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Diode: A procedural, monolithic approach. The fringe counting thresholds,
+    voltage history, state buffers (`was_dark`, `dark_counter`, `bright_counter`),
+    and the update math are stored directly inside the main UI class (`SideApp`).
+  - Homodyne/Lock: A modular Object-Oriented Programming (OOP) design. All fringe
+    counting, phase calculation, and ellipse-fitting thresholds are encapsulated
+    in isolated classes (`SingleSignalFringeCounter`, `HomodyneQuadratureCounter`,
+    and `HomodyneMonitor`). The main UI class (`InterferometerApp`) only queries
+    these components.
+
+* CODE IMPLEMENTATION:
+  - In `thor_main_diode.py`:
+    - The fringe counting logic is inside the `SideApp` class methods like
+      `update_accumulated_fringes(self, voltage)` (lines 1374-1471).
+    - State variables like `self.accumulated_fringes`, `self.was_dark`,
+      `self.dark_counter`, and `self.bright_counter` are instance variables of `SideApp`
+      (lines 150-170).
+  - In `thor_main_homodyne.py` and `thor_main_homodyne_lock.py`:
+    - The fringe detection states and history buffers are moved out of the UI class
+      and into decoupled helper classes:
+      - `SingleSignalFringeCounter` (lines 142-328): Tracks thresholds and counts
+        simple peak crossings for a single photodiode channel.
+      - `HomodyneQuadratureCounter` (lines 408-590): Centered around ellipse parameters,
+        computes the 2D signal radius and unwrap phase trajectory.
+      - `HomodyneMonitor` (lines 645-715): Combines the `DAQReader` with the counters,
+        handling the thread-safe DAQ loop and exposing read/calibrate interfaces.
+
+--------------------------------------------------------------------------------
+3. DIRECTION-AWARE PHASE UNWRAPPING (QUADRATURE INTERFEROMETRY)
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Diode: Performs non-directional fringe counting. It simply increments the
+    fringe count every time the voltage swings from dark (trough) to bright (peak).
+    Moving forward 10 fringes and then backward 10 fringes yields an accumulated
+    count of +20 fringes, while the net displacement is actually 0.
+  - Homodyne/Lock: Performs direction-aware phase tracking. Using the two channels,
+    it maps the normalized voltages $(S1_{norm}, S2_{norm})$ on a unit circle and
+    calculates the instantaneous phase angle:
+      $\theta = \text{atan2}(S2_{norm}, S1_{norm})$
+    It then unwraps the phase change over consecutive samples:
+      $\Delta\theta = \text{wrap\_to\_pi}(\theta_{current} - \theta_{previous})$
+    This allows the counter to increment on forward movements and decrement on
+    backward movements, meaning moving forward 10 fringes and backward 10 fringes
+    brings the net fringe count back to exactly 0.
+
+* CODE IMPLEMENTATION:
+  - In `thor_main_diode.py`:
+    - Threshold-based count logic inside `update_accumulated_fringes(self, voltage)`:
+      ```python
+      rise_from_trough = smooth_voltage - self.fringe_trough_voltage
+      if (self.was_dark and rise_from_trough >= self.fringe_rise_threshold_voltage):
+          self.accumulated_fringes += 1
+          self.was_dark = False
+      ```
+  - In `thor_main_homodyne.py` and `thor_main_homodyne_lock.py`:
+    - Direction-aware phase updates inside `HomodyneQuadratureCounter.update(self, raw_s1, raw_s2)` (lines 530-580):
+      ```python
+      phase_rad = self.phase_direction_sign * math.atan2(s2_centered, s1_centered)
+      delta_phase_rad = wrap_to_pi(phase_rad - self.previous_phase_rad)
+      self.unwrapped_phase_rad += delta_phase_rad
+      fringe_position = self.unwrapped_phase_rad / (2 * math.pi)
+      new_signed_fringes = completed_signed_fringes(fringe_position)
+      fringe_delta = new_signed_fringes - self.signed_fringes
+      self.signed_fringes = new_signed_fringes
+      ```
+    - The helper functions `wrap_to_pi` (line 120) and `completed_signed_fringes` (line 123)
+      enable this unwrapping.
+
+--------------------------------------------------------------------------------
+4. PLOTTING VISUALIZATION: VOLTAGE-TIME vs. LISSAJOUS CIRCLE
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Diode: Shows one graph representing voltage vs. time (oscilloscope view)
+    displaying the signal fluctuations.
+  - Homodyne/Lock: Displays two graphs side-by-side:
+    1. Raw photodiode signals S1 and S2 plotted vs. time (showing their quadrature phase relationship).
+    2. A 2D Lissajous plot ($S1$ on X-axis, $S2$ on Y-axis). If the signals are in quadrature,
+       the trajectory forms a circle. This circle is essential to visually verify the
+       offsets, amplitude scaling, and phase relationship of the photodiodes.
+
+* CODE IMPLEMENTATION:
+  - In `thor_main_diode.py`:
+    - Configures a single Matplotlib axis `self.ax_voltage` in `build_plot(self)` (line 704).
+    - Renders the raw voltage buffer in `update_plot(self)` (lines 1484-1510).
+  - In `thor_main_homodyne.py` and `thor_main_homodyne_lock.py`:
+    - In `build_plot(self)`: Configures two axes: `self.axis_raw` (for voltage vs. time) and
+      `self.axis_circle` (for the Lissajous 2D plot).
+    - Renders the 2D unit circle trace and current pointer in `update_plot_data(self)`:
+      ```python
+      self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
+      self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
+      self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
+      ```
+
+--------------------------------------------------------------------------------
+5. CLOSED-LOOP ACTIVE FEEDBACK STABILIZATION (LOCKING) - LOCK ONLY
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Homodyne: Only monitors and plots the position. It cannot actively correct
+    stage positions or drift.
+  - Lock: Implements a real-time active feedback loop. When the lock is engaged, it
+    saves the initial locking coordinate. If thermal drift or external vibration
+    causes the stage to shift (measured in fractions of a fringe by the homodyne
+    quadrature counter), the lock calculates the error and automatically commands
+    the translation stage to move in the opposite direction, holding the position stable.
+
+* CODE IMPLEMENTATION:
+  - This is exclusively implemented in `thor_main_homodyne_lock.py`.
+  - The locking feedback check is triggered inside `update_lock_display(self, sample, distance_mm)` (line 3445)
+    in every UI refresh cycle.
+  - The correction determination is executed in `maybe_start_lock_correction(self, drift_mm, correction_mm, sample)` (lines 3494-3623):
+    - It computes the negative feedback correction coordinate:
+      `correction_step_mm = - (sample.signed_fringes * fringe_distance_mm)`
+    - Clamps the corrective movement to a maximum of 2 fringes (0.0008 mm) for safety:
+      ```python
+      max_lock_deviation_mm = 0.0008
+      if correction_step_mm > max_lock_deviation_mm:
+          correction_step_mm = max_lock_deviation_mm
+      ```
+    - Calculates the absolute target coordinate relative to the saved lock reference:
+      `target_position_mm = self.lock_stage_position_mm + correction_step_mm`
+    - Commands the stage to move absolute to that target:
+      `self.stage.move_absolute(target_position_mm)`
+    - Launches `lock_correction_worker(self)` (line 3624) to wait asynchronously for the
+      movement to finish, ensuring the GUI doesn't freeze.
+
+--------------------------------------------------------------------------------
+6. LOCK SAFETY INTERLOCKS - LOCK ONLY
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Homodyne: Allows moving the stage manually or starting new measurements
+    freely at any time.
+  - Lock: Blocks manual operations when the feedback lock is active to prevent
+    vibration and conflicting motion commands from damaging the stage or ruining
+    the calibration.
+
+* CODE IMPLEMENTATION:
+  - In `thor_main_homodyne_lock.py`:
+    - Blocks starting a measurement inside `toggle_measurement(self)` (line 1834):
+      ```python
+      if self.lock_active:
+          self.status.configure(text="Status: Lock is active, cannot start measurement", text_color=RED_COLOR)
+          return
+      ```
+    - Intercepts manual movements inside `prepare_stage_for_move(self)` (line 2046):
+      ```python
+      if self.lock_active:
+          self.label_stage_status.configure(text="Stage: Lock is active, manual move blocked", text_color=RED_COLOR)
+          return False
+      ```
+
+--------------------------------------------------------------------------------
+7. INTERACTIVE CALIBRATION FALLBACK DIALOG - LOCK ONLY
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Homodyne: If calibration has not been run, it attempts dynamic offset
+    estimation in plots, but does not provide an interactive dialogue to input
+    known parameters.
+  - Lock: When engaging the lock, the software requires a calibrated fringe
+    amplitude to configure detection thresholds. If the user hasn't calibrated
+    yet, the lock button displays an interactive Tkinter float input dialog
+    asking the user to enter the default fringe amplitude (V), letting them lock
+    manually using a known voltage scale.
+
+* CODE IMPLEMENTATION:
+  - Exclusively implemented in `toggle_lock(self)` in `thor_main_homodyne_lock.py` (lines 3320-3350):
+    ```python
+    if not self.monitor.single_counter.fringes_visible:
+        val = sd.askfloat(
+            "Default Fringe Amplitude",
+            "No calibrated fringe value found.\n\nPlease enter the default fringe amplitude in Volts (e.g. 0.010):",
+            parent=self.root,
+            initialvalue=0.010,
+            minvalue=0.0001,
+            maxvalue=2.0
+        )
+        if val is None:
+            return  # user canceled
+        self.monitor.single_counter.fringe_amplitude_voltage = val
+        self.monitor.single_counter.fringes_visible = True
+    ```
+
+--------------------------------------------------------------------------------
+8. POST-CORRECTION COUNTER RESETS (DAQ ALIASING FILTER) - LOCK ONLY
+--------------------------------------------------------------------------------
+* CONCEPT:
+  - Homodyne: Counts continuously as the stage moves.
+  - Lock: When the lock commands a stage correction, the stage moves. Because
+    the stage moves faster than the DAQ sampling rate can resolve without aliasing
+    (frequency > 3 kHz vs. 200 Hz sampling), the counter registers random/aliased
+    counts during the move. To prevent these transient errors from accumulating, the
+    lock resets the fringe and phase counters back to 0 as soon as the correction
+    movement settles at the target, keeping the lock tracking perfectly clean.
+
+* CODE IMPLEMENTATION:
+  - Exclusively implemented in `finish_lock_correction(self, position_mm)` inside
+    `thor_main_homodyne_lock.py` (line 3659):
+    ```python
+    if self.lock_active:
+        if self.monitor is not None:
+            self.monitor.counter.reset()
+            self.monitor.single_counter.reset()
+            self.monitor.s2_visibility_counter.reset()
+    ```
+================================================================================
