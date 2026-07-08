@@ -3638,7 +3638,8 @@ class HomodyneGui:
         peak_to_peak_s1 = max(s1_hist) - min(s1_hist) if s1_hist else 0.0
         peak_to_peak_s2 = max(s2_hist) - min(s2_hist) if s2_hist else 0.0
 
-        if peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05:
+        is_measuring = getattr(self, 'measuring', False) or getattr(self, 'calibrating', False)
+        if not is_measuring and (peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05):
             # Draw flat gray lines at raw signal averages
             mean_s1 = sum(s1_hist) / len(s1_hist) if s1_hist else 0.0
             mean_s2 = sum(s2_hist) / len(s2_hist) if s2_hist else 0.0
