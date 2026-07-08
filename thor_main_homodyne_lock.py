@@ -3359,12 +3359,30 @@ class HomodyneGui:
                 # Wait for move to finish
                 while self.stage.is_moving and self.monitoring:
                     time.sleep(0.01)
+            
+            # Tiny pause to let Kinesis status settle and clear command queues
+            time.sleep(0.2)
                     
-            # Move stage back to start_pos
-            if self.stage.move_absolute(start_pos):
+            # Move stage back to start_pos (with retry)
+            moved_back = False
+            for retry in range(3):
+                if self.stage.move_absolute(start_pos):
+                    moved_back = True
+                    break
+                time.sleep(0.2)
+                
+            if moved_back:
                 # Wait for move to finish
                 while self.stage.is_moving and self.monitoring:
                     time.sleep(0.01)
+            else:
+                self.root.after(0, lambda: self.status.configure(
+                    text="Status: Sweep return move failed!",
+                    text_color=RED_COLOR
+                ))
+            
+            # Wait for stage to settle and stop completely
+            time.sleep(0.5)
                     
             # Stop collection
             collecting[0] = False
