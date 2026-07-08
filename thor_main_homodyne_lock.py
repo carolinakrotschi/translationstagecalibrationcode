@@ -3329,6 +3329,11 @@ class HomodyneGui:
 
         # Reset homodyne counter so direction change (Lissajous) and fringes are measured starting from here
         if self.monitor is not None and self.monitor.counter is not None:
+            self.monitor.counter.set_signal_visibility(True, True)
+            if self.monitor.single_counter is not None:
+                self.monitor.single_counter.fringes_visible = True
+            if self.monitor.s2_visibility_counter is not None:
+                self.monitor.s2_visibility_counter.fringes_visible = True
             self.monitor.counter.reset()
             self.monitor.s2_visibility_counter.reset()
 
