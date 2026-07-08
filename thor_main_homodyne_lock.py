@@ -1253,6 +1253,13 @@ class HomodyneGui:
                     color=color,
                     label=label
                 )[0]
+                self.plot_lines[key + '_fit'] = axis.plot(
+                    [],
+                    [],
+                    color='orange' if key == 'S1_raw' else 'magenta',
+                    linestyle='--',
+                    label=label + ' fit'
+                )[0]
                 axis.legend(loc="upper right", prop={"size": 8})
 
             axes[1].set_xlabel("Samples", fontsize=8)
@@ -1312,10 +1319,18 @@ class HomodyneGui:
 
         ctk.CTkLabel(
             self.plot_frame_circle,
-            text="Lissajous Circle & Angle Visualizer",
+            text="Lissajous",
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
         ).pack(pady=(10, 4))
+
+        self.label_lissajous_direction = ctk.CTkLabel(
+            self.plot_frame_circle,
+            text="STILL",
+            font=("Arial", 22, "bold"),
+            text_color=ORANGE_COLOR
+        )
+        self.label_lissajous_direction.pack(pady=(2, 6))
 
         if plt is None or FigureCanvasTkAgg is None:
             self.plot_canvas_circle = None
@@ -3010,6 +3025,11 @@ class HomodyneGui:
         if not self.monitoring and not self.calibrating:
             return
 
+        self.label_lissajous_direction.configure(
+            text="STILL",
+            text_color=ORANGE_COLOR
+        )
+
         with self.sample_display_lock:
             sample = self.latest_sample
             distance_mm = self.latest_distance_mm
@@ -3073,12 +3093,15 @@ class HomodyneGui:
 
             dir_text = "Still"
             dir_color = ORANGE_COLOR
+            lissajous_dir_text = "STILL"
             if sample.direction == "forward":
                 dir_text = "Forward →"
                 dir_color = GREEN_COLOR
+                lissajous_dir_text = "FORWARD"
             elif sample.direction == "backward":
                 dir_text = "Backward ←"
                 dir_color = RED_COLOR
+                lissajous_dir_text = "BACKWARD"
             elif sample.direction == "signal_low":
                 dir_text = "Signal Low"
                 dir_color = RED_COLOR
@@ -3088,6 +3111,10 @@ class HomodyneGui:
 
             self.label_direction.configure(
                 text=f"Direction: {dir_text}",
+                text_color=dir_color
+            )
+            self.label_lissajous_direction.configure(
+                text=lissajous_dir_text,
                 text_color=dir_color
             )
 
@@ -3144,7 +3171,7 @@ class HomodyneGui:
                         self.raw_s1_history.pop(0)
                         self.raw_s2_history.pop(0)
 
-                if self.measuring:
+                if self.measuring or self.lock_active:
                     if self.calibrating:
                         if calibration_start_time is None:
                             # No extra stage motion for calibration
@@ -3290,6 +3317,10 @@ class HomodyneGui:
         )
         self.label_direction.configure(
             text="Direction: Still"
+        )
+        self.label_lissajous_direction.configure(
+            text="STILL",
+            text_color=ORANGE_COLOR
         )
         self.label_distance.configure(
             text="distance_mm = fringe_position * fringe_distance_mm = n/a"
@@ -3471,9 +3502,9 @@ class HomodyneGui:
         ):
             return
 
-        # Check if fringes are detected (i.e. at least 1 fringe has accumulated since lock)
-        # "wenn fringes detektiert werden soll geschaut werden in welche richtung und dann soll die stage die gleiche distanz in die jeweilig andere richtung gefahren werden"
-        if sample is None or abs(sample.signed_fringes) < 1:
+        # Check if a fringe was counted
+        # "wenn ein fringe gezählt wird, soll geschaut werden ob es forward oder backward war und dann die stage um die distanz in die jeweils andere richtung zurückbewegt werden"
+        if sample is None or sample.signed_fringes == 0:
             return
 
         now = time.time()
@@ -3481,8 +3512,12 @@ class HomodyneGui:
         if now - self.lock_last_correction_time < LOCK_CORRECTION_COOLDOWN_S:
             return
 
-        # Drive the stage the same distance in the other direction to compensate for drift
-        correction_step_mm = correction_mm
+        # Determine direction: positive = forward drift, negative = backward drift
+        # Drive the stage the same distance in the other direction to compensate
+        fringe_distance_mm = self.monitor.counter.fringe_distance_mm
+        if fringe_distance_mm is None:
+            fringe_distance_mm = 0.000316
+        correction_step_mm = -STAGE_CORRECTION_SIGN * (sample.signed_fringes * fringe_distance_mm)
         current_position_mm = self.stage.get_position()
         target_position_mm = self.stage.clamp_position(
             current_position_mm + correction_step_mm
@@ -3660,6 +3695,8 @@ class HomodyneGui:
         if reset:
             self.plot_lines['S1_raw'].set_data([], [])
             self.plot_lines['S2_raw'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3688,10 +3725,12 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
 
-        if not self.measuring or not self.monitor.counter.signals_visible():
+        if not (self.measuring or self.lock_active) or not self.monitor.counter.signals_visible():
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
             self.plot_quiver.set_visible(False)
             self.plot_canvas.draw_idle()
             self.plot_canvas_circle.draw_idle()
@@ -3749,6 +3788,13 @@ class HomodyneGui:
         display_s2 = smoothed_s2
 
         self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
+
+        # Scale fit back to raw voltage levels for raw S1 and S2 plots
+        fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
+        fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
+
+        self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+        self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
 
         if display_s1:
             curr_x = display_s1[-1]
