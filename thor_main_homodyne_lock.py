@@ -3078,7 +3078,7 @@ class HomodyneGui:
             self.update_lock_display(sample, distance_mm)
 
             if self.lock_active:
-                fringes_diff = single_fringes - self.lock_ref_single_fringes
+                fringes_diff = sample.signed_fringes if sample is not None else 0
                 self.label_fringes_since_locking.configure(
                     text=f"Fringes since locking: {fringes_diff:+d}"
                 )
@@ -3668,6 +3668,12 @@ class HomodyneGui:
 
         if not self.lock_active:
             return
+
+        # Reset counters to clear any transient/aliased counts during the movement
+        if self.monitor is not None:
+            self.monitor.counter.reset()
+            self.monitor.single_counter.reset()
+            self.monitor.s2_visibility_counter.reset()
 
         self.label_stage_status.configure(
             text="Stage: connected",
