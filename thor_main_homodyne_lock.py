@@ -79,6 +79,7 @@ import math
 import threading # so that camera and stage can run without freezing the UI
 import time # for timestamps
 from dataclasses import dataclass
+import tkinter.simpledialog as sd
 
 try:
     import customtkinter as ctk # pythons standard UI library
@@ -3318,178 +3319,84 @@ class HomodyneGui:
             )
             return
 
-        # Start the background sweep calibration thread
-        threading.Thread(
-            target=self.lock_calibration_sweep_worker,
-            daemon=True
-        ).start()
+        # Check if we have a calibrated fringe amplitude
+        if self.monitor is not None and self.monitor.single_counter is not None:
+            if not self.monitor.single_counter.fringes_visible:
+                # Prompt the user for the default fringe amplitude (V)
+                val = sd.askfloat(
+                    "Default Fringe Amplitude",
+                    "No calibrated fringe value found.\n\nPlease enter the default fringe amplitude in Volts (e.g. 0.010):",
+                    parent=self.root,
+                    initialvalue=0.010,
+                    minvalue=0.0001,
+                    maxvalue=2.0
+                )
+                if val is None:
+                    # User cancelled the dialog, abort locking
+                    return
+                
+                # Configure counters with this default value
+                self.monitor.single_counter.fringe_amplitude_voltage = val
+                self.monitor.single_counter.fringes_visible = True
+                
+                self.monitor.s2_visibility_counter.fringe_amplitude_voltage = val
+                self.monitor.s2_visibility_counter.fringes_visible = True
+                
+                self.monitor.counter.set_signal_visibility(True, True)
 
-    def lock_calibration_sweep_worker(self):
-        try:
-            self.root.after(0, lambda: self.status.configure(
-                text="Status: Sweep calibration running...",
-                text_color=ORANGE_COLOR
-            ))
-            
-            # Temporary list for photodiode samples during sweep
-            sweep_samples = []
-            
-            # Flag to control photodiode reader thread
-            collecting = [True]
-            
-            def collect_loop():
-                while collecting[0]:
-                    if self.monitoring and self.stage_connected and self.monitor is not None:
-                        try:
-                            r1, r2 = self.monitor.reader.read()
-                            sweep_samples.append((r1, r2))
-                        except Exception:
-                            pass
-                    time.sleep(SAMPLE_INTERVAL_S)
-                    
-            collector_thread = threading.Thread(target=collect_loop, daemon=True)
-            collector_thread.start()
-            
-            # Save original position
-            start_pos = self.stage.get_position()
-            
-            # Move stage 0.002 mm forward (with verification and retries)
-            forward_target = self.stage.clamp_position(start_pos + 0.002)
-            moved_forward = False
-            for retry in range(3):
-                # Force stage to stop and clear command registers
-                self.stage.stop()
-                time.sleep(0.1)
-                
-                if self.stage.move_absolute(forward_target):
-                    time.sleep(0.05)
-                    while self.stage.is_moving and self.monitoring:
-                        time.sleep(0.01)
-                    
-                    # Verify arrival
-                    curr_pos = self.stage.get_position()
-                    if abs(curr_pos - forward_target) < 0.0001:
-                        moved_forward = True
-                        break
-                    else:
-                        print(f"DEBUG: Sweep forward retry {retry} ended at {curr_pos}, target {forward_target}")
-            
-            if not moved_forward:
-                self.root.after(0, lambda: self.status.configure(
-                    text="Status: Sweep forward move failed!",
-                    text_color=RED_COLOR
-                ))
-            
-            # Stop stage and wait to let status registers settle
+            # In all cases (either reusing the last calibration or setting the default value),
+            # enforce the strict 98% rise/rearm thresholds:
+            amp = self.monitor.single_counter.fringe_amplitude_voltage
+            self.monitor.single_counter.fringe_rise_threshold_voltage = amp * 0.98
+            self.monitor.single_counter.fringe_rearm_threshold_voltage = amp * 0.98
+
+            amp_s2 = self.monitor.s2_visibility_counter.fringe_amplitude_voltage
+            self.monitor.s2_visibility_counter.fringe_rise_threshold_voltage = amp_s2 * 0.98
+            self.monitor.s2_visibility_counter.fringe_rearm_threshold_voltage = amp_s2 * 0.98
+
+        # Keep stage stationary
+        if self.stage_connected and self.stage is not None:
             self.stage.stop()
-            time.sleep(0.2)
-                    
-            # Move stage back to start_pos (with verification and retries)
-            moved_back = False
-            for retry in range(5):
-                # Force stage to stop and clear command registers
-                self.stage.stop()
-                time.sleep(0.1)
-                
-                if self.stage.move_absolute(start_pos):
-                    time.sleep(0.05)
-                    while self.stage.is_moving and self.monitoring:
-                        time.sleep(0.01)
-                    
-                    # Verify arrival
-                    curr_pos = self.stage.get_position()
-                    if abs(curr_pos - start_pos) < 0.0001:
-                        moved_back = True
-                        break
-                    else:
-                        print(f"DEBUG: Sweep return retry {retry} ended at {curr_pos}, target {start_pos}")
-                
-            if not moved_back:
-                self.root.after(0, lambda: self.status.configure(
-                    text="Status: Lock failed - stage could not return to start position",
-                    text_color=RED_COLOR
-                ))
-                # Stop collection
-                collecting[0] = False
-                collector_thread.join(timeout=1.0)
-                return
-            
-            # Wait for stage to settle and stop completely
-            self.stage.stop()
-            time.sleep(0.5)
-                    
-            # Stop collection
-            collecting[0] = False
-            collector_thread.join(timeout=1.0)
-            
-            # Calibrate using the collected sweep samples
-            if sweep_samples and self.monitoring and self.monitor is not None:
-                self.monitor.counter.calibrate_from_samples(sweep_samples)
-                s1_vals = [s[0] for s in sweep_samples]
-                s2_vals = [s[1] for s in sweep_samples]
-                self.monitor.single_counter.calibrate(s1_vals)
-                self.monitor.s2_visibility_counter.calibrate(s2_vals)
-                
-                # Apply strict threshold rule to SingleSignalFringeCounter:
-                self.monitor.single_counter.fringe_rise_threshold_voltage = (
-                    self.monitor.single_counter.fringe_amplitude_voltage * 0.98
-                )
-                self.monitor.single_counter.fringe_rearm_threshold_voltage = (
-                    self.monitor.single_counter.fringe_amplitude_voltage * 0.98
-                )
-                
-                self.monitor.counter.set_signal_visibility(
-                    self.monitor.single_counter.fringes_visible,
-                    self.monitor.s2_visibility_counter.fringes_visible
-                )
-                
-            # Reset counters so this sweep is NOT counted in the lock fringes
-            if self.monitor is not None:
-                self.monitor.counter.reset()
-                self.monitor.single_counter.reset()
-                self.monitor.s2_visibility_counter.reset()
-                
-            def activate():
-                self.lock_stage_position_mm = start_pos
-                self.lock_ref_single_fringes = 0
-                self.lock_active = True
-                
-                self.lock_reference_distance_mm = 0.0
-                self.lock_reference_phase_rad = 0.0
-                self.lock_reference_fringes = 0
-                self.latest_sample = None
-                self.latest_distance_mm = 0.0
-                
-                self.btn_lock.configure(
-                    text="UNLOCK",
-                    fg_color=GREEN_COLOR
-                )
-                if hasattr(self, 'btn_lock_box'):
-                    self.btn_lock_box.configure(
-                        text="UNLOCK",
-                        fg_color=GREEN_COLOR
-                    )
-                if hasattr(self, 'label_lock_status_box'):
-                    self.label_lock_status_box.configure(
-                        text="Lock Status: active",
-                        text_color=GREEN_COLOR
-                    )
-                self.label_lock_status.configure(
-                    text="Lock: on",
-                    text_color=GREEN_COLOR
-                )
-                self.status.configure(
-                    text="Status: locked",
-                    text_color=GREEN_COLOR
-                )
-                
-            self.root.after(0, activate)
-            
-        except Exception as e:
-            self.root.after(0, lambda err=str(e): self.status.configure(
-                text=f"Status: Lock calibration failed: {err}",
-                text_color=RED_COLOR
-            ))
+            self.lock_stage_position_mm = self.stage.get_position()
+        else:
+            self.lock_stage_position_mm = 0.0
+
+        # Reset counters so locking starts at exactly 0
+        if self.monitor is not None:
+            self.monitor.counter.reset()
+            self.monitor.single_counter.reset()
+            self.monitor.s2_visibility_counter.reset()
+
+        self.lock_active = True
+        self.lock_reference_distance_mm = 0.0
+        self.lock_reference_phase_rad = 0.0
+        self.lock_reference_fringes = 0
+        self.latest_sample = None
+        self.latest_distance_mm = 0.0
+        self.lock_ref_single_fringes = 0
+
+        self.btn_lock.configure(
+            text="UNLOCK",
+            fg_color=GREEN_COLOR
+        )
+        if hasattr(self, 'btn_lock_box'):
+            self.btn_lock_box.configure(
+                text="UNLOCK",
+                fg_color=GREEN_COLOR
+            )
+        if hasattr(self, 'label_lock_status_box'):
+            self.label_lock_status_box.configure(
+                text="Lock Status: active",
+                text_color=GREEN_COLOR
+            )
+        self.label_lock_status.configure(
+            text="Lock: on",
+            text_color=GREEN_COLOR
+        )
+        self.status.configure(
+            text="Status: locked",
+            text_color=GREEN_COLOR
+        )
 
     #return everything to unlock state
     def disable_lock(self, update_status=True):
