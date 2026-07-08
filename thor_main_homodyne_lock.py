@@ -3743,6 +3743,8 @@ class HomodyneGui:
             self.plot_lines['S2_raw'].set_data([], [])
             self.plot_lines['S1_raw_fit'].set_data([], [])
             self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3777,6 +3779,8 @@ class HomodyneGui:
             self.plot_lines['circle_pointer'].set_data([], [])
             self.plot_lines['S1_raw_fit'].set_data([], [])
             self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
             self.plot_quiver.set_visible(False)
             self.plot_canvas.draw_idle()
             self.plot_canvas_circle.draw_idle()
@@ -3841,6 +3845,8 @@ class HomodyneGui:
 
         self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
         self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+        self.plot_lines['S1_raw_fit'].set_visible(True)
+        self.plot_lines['S2_raw_fit'].set_visible(True)
 
         if display_s1:
             curr_x = display_s1[-1]
