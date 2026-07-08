@@ -3613,6 +3613,27 @@ class HomodyneGui:
             offset_s2 = self.monitor.counter.offset_s2
             scale_s2 = self.monitor.counter.scale_s2
 
+        # If offsets/scales are default/zero, estimate them dynamically from current history
+        # so that the fit line is drawn exactly at the height of the raw signal
+        if offset_s1 == 0.0 or scale_s1 == 1.0:
+            if s1_hist:
+                offset_s1 = sum(s1_hist) / len(s1_hist)
+                mean_s1 = offset_s1
+                var_s1 = sum((r - mean_s1)**2 for r in s1_hist) / len(s1_hist)
+                std_s1 = math.sqrt(var_s1)
+                scale_s1 = std_s1 * 1.414
+                if scale_s1 < 0.01:
+                    scale_s1 = 0.1
+        if offset_s2 == 0.0 or scale_s2 == 1.0:
+            if s2_hist:
+                offset_s2 = sum(s2_hist) / len(s2_hist)
+                mean_s2 = offset_s2
+                var_s2 = sum((r - mean_s2)**2 for r in s2_hist) / len(s2_hist)
+                std_s2 = math.sqrt(var_s2)
+                scale_s2 = std_s2 * 1.414
+                if scale_s2 < 0.01:
+                    scale_s2 = 0.1
+
         for r1, r2 in zip(s1_hist, s2_hist):
             s1 = (r1 - offset_s1) / (scale_s1 if scale_s1 > 1e-12 else 1.0)
             s2 = (r2 - offset_s2) / (scale_s2 if scale_s2 > 1e-12 else 1.0)
