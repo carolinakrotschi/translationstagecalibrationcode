@@ -3357,9 +3357,8 @@ class HomodyneGui:
             forward_target = self.stage.clamp_position(start_pos + 0.002)
             moved_forward = False
             for retry in range(3):
-                # Ensure stage has stopped before commanding move
-                while self.stage.is_moving and self.monitoring:
-                    time.sleep(0.05)
+                # Force stage to stop and clear command registers
+                self.stage.stop()
                 time.sleep(0.1)
                 
                 if self.stage.move_absolute(forward_target):
@@ -3381,15 +3380,15 @@ class HomodyneGui:
                     text_color=RED_COLOR
                 ))
             
-            # Tiny pause to let Kinesis status settle and clear command queues
+            # Stop stage and wait to let status registers settle
+            self.stage.stop()
             time.sleep(0.2)
                     
             # Move stage back to start_pos (with verification and retries)
             moved_back = False
             for retry in range(5):
-                # Ensure stage has stopped before commanding move
-                while self.stage.is_moving and self.monitoring:
-                    time.sleep(0.05)
+                # Force stage to stop and clear command registers
+                self.stage.stop()
                 time.sleep(0.1)
                 
                 if self.stage.move_absolute(start_pos):
@@ -3407,11 +3406,16 @@ class HomodyneGui:
                 
             if not moved_back:
                 self.root.after(0, lambda: self.status.configure(
-                    text="Status: Sweep return move failed!",
+                    text="Status: Lock failed - stage could not return to start position",
                     text_color=RED_COLOR
                 ))
+                # Stop collection
+                collecting[0] = False
+                collector_thread.join(timeout=1.0)
+                return
             
             # Wait for stage to settle and stop completely
+            self.stage.stop()
             time.sleep(0.5)
                     
             # Stop collection
