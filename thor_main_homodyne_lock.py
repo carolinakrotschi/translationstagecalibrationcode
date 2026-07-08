@@ -3318,12 +3318,7 @@ class HomodyneGui:
             )
             return
 
-        if self.latest_sample is None or self.latest_distance_mm is None:
-            self.status.configure(
-                text="Status: wait for a valid homodyne sample",
-                text_color=ORANGE_COLOR
-            )
-            return
+
 
         # Keep stage stationary
         if self.stage_connected and self.stage is not None:
