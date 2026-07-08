@@ -1400,137 +1400,22 @@ class HomodyneGui:
             self.plot_canvas_circle.draw()
             self.plot_canvas_circle.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
 
-        values_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
-        values_frame.pack(fill="x", pady=4, padx=8)
-
-        ctk.CTkLabel(
-            values_frame,
-            text="Quadrature Homodyne Monitor",
-            font=("Arial", 14, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(8, 4))
-
-        self.label_phase = ctk.CTkLabel(
-            values_frame,
-            text="phase_rad = atan2(S2_norm, S1_norm) = 0.00000 rad",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_phase.pack(pady=2)
-
-        self.label_s1_norm = ctk.CTkLabel(
-            values_frame,
-            text="S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_s1_norm.pack(pady=2)
-
-        self.label_s2_norm = ctk.CTkLabel(
-            values_frame,
-            text="S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_s2_norm.pack(pady=2)
-
-        self.label_unwrapped_phase = ctk.CTkLabel(
-            values_frame,
-            text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_unwrapped_phase.pack(pady=2)
-
-        self.label_fringe_position = ctk.CTkLabel(
-            values_frame,
-            text="fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_fringe_position.pack(pady=2)
-
-        self.label_fringes = ctk.CTkLabel(
-            values_frame,
-            text="signed_fringes = 0",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_fringes.pack(pady=2)
-
-        self.label_direction = ctk.CTkLabel(
-            values_frame,
-            text="Direction: Still",
-            font=("Arial", 16, "bold"),
-            text_color=TEXT_COLOR
-        )
-        self.label_direction.pack(pady=10)
-
-        self.label_distance = ctk.CTkLabel(
-            values_frame,
-            text="distance_mm = fringe_position * fringe_distance_mm = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_distance.pack(pady=2)
-
-        lock_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
-        # lock_frame.pack(fill="x", pady=4, padx=8)
-
-        ctk.CTkLabel(
-            lock_frame,
-            text="Stage Lock & Status",
-            font=("Arial", 14, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(8, 4))
-
-        self.label_lock_status = ctk.CTkLabel(
-            lock_frame,
-            text="Lock: off",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_status.pack(pady=2)
-
-        self.label_lock_reference = ctk.CTkLabel(
-            lock_frame,
-            text="Reference: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_reference.pack(pady=2)
-
-        self.label_lock_drift = ctk.CTkLabel(
-            lock_frame,
-            text="Drift: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_drift.pack(pady=2)
-
-        self.label_lock_correction = ctk.CTkLabel(
-            lock_frame,
-            text="Correction to lock: n/a",
-            font=("Arial", 12, "bold"),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_correction.pack(pady=2)
-
-        self.label_stage_status = ctk.CTkLabel(
-            lock_frame,
-            text="Stage: not connected",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_stage_status.pack(pady=2)
-
-        self.label_stage_position_lock = ctk.CTkLabel(
-            lock_frame,
-            text="Stage position: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_stage_position_lock.pack(pady=2)
+        # Create dummy labels that are not packed to avoid AttributeError in other methods
+        dummy_parent = ctk.CTkFrame(self.right_col)
+        self.label_phase = ctk.CTkLabel(dummy_parent)
+        self.label_s1_norm = ctk.CTkLabel(dummy_parent)
+        self.label_s2_norm = ctk.CTkLabel(dummy_parent)
+        self.label_unwrapped_phase = ctk.CTkLabel(dummy_parent)
+        self.label_fringe_position = ctk.CTkLabel(dummy_parent)
+        self.label_fringes = ctk.CTkLabel(dummy_parent)
+        self.label_direction = ctk.CTkLabel(dummy_parent)
+        self.label_distance = ctk.CTkLabel(dummy_parent)
+        self.label_lock_status = ctk.CTkLabel(dummy_parent)
+        self.label_lock_reference = ctk.CTkLabel(dummy_parent)
+        self.label_lock_drift = ctk.CTkLabel(dummy_parent)
+        self.label_lock_correction = ctk.CTkLabel(dummy_parent)
+        self.label_stage_status = ctk.CTkLabel(dummy_parent)
+        self.label_stage_position_lock = ctk.CTkLabel(dummy_parent)
 
         self.compare_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
         self.compare_frame.pack(fill="x", pady=4, padx=0)

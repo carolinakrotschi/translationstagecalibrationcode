@@ -876,20 +876,13 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def build_ui(self):
-        ctk.CTkLabel(
-            self.scroll,
-            text="Homodyne Quadrature Monitor",
-            font=("Arial", 23, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(16, 8))
-
         self.status = ctk.CTkLabel(
             self.scroll,
             text="Status: stopped",
             font=("Arial", 12),
             text_color=TEXT_COLOR
         )
-        self.status.pack(pady=(0, 12))
+        self.status.pack(pady=(16, 12))
 
         control_frame = ctk.CTkFrame(self.scroll, fg_color="#EEEEEE")
         control_frame.pack(fill="x", padx=18, pady=8)
@@ -1403,137 +1396,22 @@ class HomodyneGui:
             self.plot_canvas_circle.draw()
             self.plot_canvas_circle.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
 
-        values_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
-        values_frame.pack(fill="x", pady=4, padx=8)
-
-        ctk.CTkLabel(
-            values_frame,
-            text="Quadrature Homodyne Monitor",
-            font=("Arial", 14, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(8, 4))
-
-        self.label_phase = ctk.CTkLabel(
-            values_frame,
-            text="phase_rad = atan2(S2_norm, S1_norm) = 0.00000 rad",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_phase.pack(pady=2)
-
-        self.label_s1_norm = ctk.CTkLabel(
-            values_frame,
-            text="S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_s1_norm.pack(pady=2)
-
-        self.label_s2_norm = ctk.CTkLabel(
-            values_frame,
-            text="S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_s2_norm.pack(pady=2)
-
-        self.label_unwrapped_phase = ctk.CTkLabel(
-            values_frame,
-            text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_unwrapped_phase.pack(pady=2)
-
-        self.label_fringe_position = ctk.CTkLabel(
-            values_frame,
-            text="fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_fringe_position.pack(pady=2)
-
-        self.label_fringes = ctk.CTkLabel(
-            values_frame,
-            text="signed_fringes = 0",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_fringes.pack(pady=2)
-
-        self.label_direction = ctk.CTkLabel(
-            values_frame,
-            text="Direction: Still",
-            font=("Arial", 16, "bold"),
-            text_color=TEXT_COLOR
-        )
-        self.label_direction.pack(pady=10)
-
-        self.label_distance = ctk.CTkLabel(
-            values_frame,
-            text="distance_mm = fringe_position * fringe_distance_mm = n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        # self.label_distance.pack(pady=2)
-
-        lock_frame = ctk.CTkFrame(self.right_col, fg_color="#EEEEEE")
-        # lock_frame.pack(fill="x", pady=4, padx=8)
-
-        ctk.CTkLabel(
-            lock_frame,
-            text="Stage Lock & Status",
-            font=("Arial", 14, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(pady=(8, 4))
-
-        self.label_lock_status = ctk.CTkLabel(
-            lock_frame,
-            text="Lock: off",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_status.pack(pady=2)
-
-        self.label_lock_reference = ctk.CTkLabel(
-            lock_frame,
-            text="Reference: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_reference.pack(pady=2)
-
-        self.label_lock_drift = ctk.CTkLabel(
-            lock_frame,
-            text="Drift: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_drift.pack(pady=2)
-
-        self.label_lock_correction = ctk.CTkLabel(
-            lock_frame,
-            text="Correction to lock: n/a",
-            font=("Arial", 12, "bold"),
-            text_color=TEXT_COLOR
-        )
-        self.label_lock_correction.pack(pady=2)
-
-        self.label_stage_status = ctk.CTkLabel(
-            lock_frame,
-            text="Stage: not connected",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_stage_status.pack(pady=2)
-
-        self.label_stage_position_lock = ctk.CTkLabel(
-            lock_frame,
-            text="Stage position: n/a",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        self.label_stage_position_lock.pack(pady=2)
+        # Create dummy labels that are not packed to avoid AttributeError in other methods
+        dummy_parent = ctk.CTkFrame(self.right_col)
+        self.label_phase = ctk.CTkLabel(dummy_parent)
+        self.label_s1_norm = ctk.CTkLabel(dummy_parent)
+        self.label_s2_norm = ctk.CTkLabel(dummy_parent)
+        self.label_unwrapped_phase = ctk.CTkLabel(dummy_parent)
+        self.label_fringe_position = ctk.CTkLabel(dummy_parent)
+        self.label_fringes = ctk.CTkLabel(dummy_parent)
+        self.label_direction = ctk.CTkLabel(dummy_parent)
+        self.label_distance = ctk.CTkLabel(dummy_parent)
+        self.label_lock_status = ctk.CTkLabel(dummy_parent)
+        self.label_lock_reference = ctk.CTkLabel(dummy_parent)
+        self.label_lock_drift = ctk.CTkLabel(dummy_parent)
+        self.label_lock_correction = ctk.CTkLabel(dummy_parent)
+        self.label_stage_status = ctk.CTkLabel(dummy_parent)
+        self.label_stage_position_lock = ctk.CTkLabel(dummy_parent)
 
         self.compare_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
         self.compare_frame.pack(fill="x", pady=4, padx=0)
@@ -3601,20 +3479,26 @@ class HomodyneGui:
         if sample is None or sample.signed_fringes == 0:
             return
 
+        fringe_distance_mm = self.monitor.counter.fringe_distance_mm
+        if fringe_distance_mm is None:
+            fringe_distance_mm = 0.000316
+
         # Check if direction is detected
         # "wenn fringes detektiert und keine richtung detektiert schreibe: fringe but still, so no correction"
         if sample.direction not in ["forward", "backward"]:
+            fringes_str = f"+{sample.signed_fringes}" if sample.signed_fringes > 0 else f"{sample.signed_fringes}"
+            msg = f"{fringes_str} fringe{'s' if abs(sample.signed_fringes) != 1 else ''}, but still, so no correction"
             self.label_lock_status.configure(
-                text="Lock: Fringe but Still, so no correction",
+                text=f"Lock: {msg}",
                 text_color=ORANGE_COLOR
             )
             if hasattr(self, 'label_lock_status_box'):
                 self.label_lock_status_box.configure(
-                    text="Lock Status: Fringe but Still, so no correction",
+                    text=f"Lock Status: {msg}",
                     text_color=ORANGE_COLOR
                 )
             self.status.configure(
-                text="Status: Fringe but Still, so no correction",
+                text=f"Status: {msg}",
                 text_color=ORANGE_COLOR
             )
             return
@@ -3624,20 +3508,30 @@ class HomodyneGui:
         if now - self.lock_last_correction_time < LOCK_CORRECTION_COOLDOWN_S:
             return
 
-        # Determine direction: positive = forward drift, negative = backward drift
-        # Drive the stage the same distance in the other direction to compensate
-        fringe_distance_mm = self.monitor.counter.fringe_distance_mm
-        if fringe_distance_mm is None:
-            fringe_distance_mm = 0.000316
-        correction_step_mm = -STAGE_CORRECTION_SIGN * (sample.signed_fringes * fringe_distance_mm)
+        # Determine the corrective step (opposite to the drift to apply true negative feedback)
+        # Drift (+) -> correction (-)
+        # Drift (-) -> correction (+)
+        # "dann mache die entgegengesetzte bewegung aber habe die position auf der ich locke gespeichert..."
+        correction_step_mm = - (sample.signed_fringes * fringe_distance_mm)
         
         # Calculate target relative to the saved lock position reference (not current_position_mm)
-        # "aber habe die position auf der ich locke gespeichert und gehe immer wieder dahin zurück und nimm das als referenz"
         target_position_mm = self.stage.clamp_position(
             self.lock_stage_position_mm + correction_step_mm
         )
         current_position_mm = self.stage.get_position()
         actual_correction_mm = target_position_mm - current_position_mm
+
+        # Determine drift and correction directions for text display
+        if sample.signed_fringes > 0:
+            drift_dir = "forward"
+            corr_dir = "backward"
+            fringes_str = f"+{sample.signed_fringes}"
+        else:
+            drift_dir = "backward"
+            corr_dir = "forward"
+            fringes_str = f"{sample.signed_fringes}"
+
+        msg = f"{fringes_str} fringe{'s' if abs(sample.signed_fringes) != 1 else ''}, direction {drift_dir}, correcting {abs(correction_step_mm):.6f} mm {corr_dir}"
 
         if abs(actual_correction_mm) < 1e-12:
             self.label_lock_status.configure(
@@ -3669,12 +3563,12 @@ class HomodyneGui:
             return
 
         self.label_lock_status.configure(
-            text=f"Lock: correcting {actual_correction_mm:+.9f} mm",
+            text=f"Lock: {msg}",
             text_color=ORANGE_COLOR
         )
         if hasattr(self, 'label_lock_status_box'):
             self.label_lock_status_box.configure(
-                text=f"Lock Status: correcting {actual_correction_mm:+.9f} mm",
+                text=f"Lock Status: {msg}",
                 text_color=ORANGE_COLOR
             )
         self.label_stage_status.configure(
