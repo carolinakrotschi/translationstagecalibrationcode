@@ -61,7 +61,7 @@ VELOCITY_MM_S_STEPPED = 1.00
 STEP_SIZE_MM = 0.00001
 STEPS = 100
 
-UI_UPDATE_INTERVAL_S = 0.05
+UI_UPDATE_INTERVAL_S = 0.1
 
 LOCK_TRIGGER_FRINGES = 1.0
 LOCK_CORRECTION_COOLDOWN_S = 0.30
@@ -3634,6 +3634,33 @@ class HomodyneGui:
                 if scale_s2 < 0.01:
                     scale_s2 = 0.1
 
+        # Determine peak-to-peak variation to check if there is signal activity to fit
+        peak_to_peak_s1 = max(s1_hist) - min(s1_hist) if s1_hist else 0.0
+        peak_to_peak_s2 = max(s2_hist) - min(s2_hist) if s2_hist else 0.0
+
+        if peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05:
+            # Draw flat gray lines at raw signal averages
+            mean_s1 = sum(s1_hist) / len(s1_hist) if s1_hist else 0.0
+            mean_s2 = sum(s2_hist) / len(s2_hist) if s2_hist else 0.0
+            fit_s1 = [mean_s1] * len(s1_hist)
+            fit_s2 = [mean_s2] * len(s2_hist)
+
+            self.plot_lines['S1_raw_fit'].set_color('gray')
+            self.plot_lines['S2_raw_fit'].set_color('gray')
+            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+            self.plot_lines['S1_raw_fit'].set_visible(True)
+            self.plot_lines['S2_raw_fit'].set_visible(True)
+
+            # Clear Lissajous circle trace so it doesn't show noise circle
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
+            self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
+            return
+
         for r1, r2 in zip(s1_hist, s2_hist):
             s1 = (r1 - offset_s1) / (scale_s1 if scale_s1 > 1e-12 else 1.0)
             s2 = (r2 - offset_s2) / (scale_s2 if scale_s2 > 1e-12 else 1.0)
@@ -3683,6 +3710,8 @@ class HomodyneGui:
         fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
         fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
 
+        self.plot_lines['S1_raw_fit'].set_color('orange')
+        self.plot_lines['S2_raw_fit'].set_color('magenta')
         self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
         self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
         self.plot_lines['S1_raw_fit'].set_visible(True)
