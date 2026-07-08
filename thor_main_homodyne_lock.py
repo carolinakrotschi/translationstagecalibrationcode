@@ -856,6 +856,8 @@ class HomodyneGui:
         self.lock_reference_phase_rad = 0.0
         self.lock_reference_fringes = 0
         self.lock_stage_position_mm = 0.0
+        self.lock_ref_single_fringes = 0
+        self.stage_position_mm = 0.0
         self.lock_correction_active = False
         self.lock_last_correction_time = 0.0
         self.lock_target_position_mm = None
@@ -1586,6 +1588,50 @@ class HomodyneGui:
             font=("Arial", 12, "bold")
         )
         self.btn_measurement.pack(pady=(6, 10))
+
+        # Create Lock Box Frame under start measurement
+        self.lock_box_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
+        self.lock_box_frame.pack(fill="x", pady=8, padx=0)
+
+        ctk.CTkLabel(
+            self.lock_box_frame,
+            text="Stage Lock Box",
+            font=("Arial", 14, "bold"),
+            text_color=TEXT_COLOR
+        ).pack(pady=(8, 4))
+
+        self.label_lock_status_box = ctk.CTkLabel(
+            self.lock_box_frame,
+            text="Lock Status: off",
+            font=("Arial", 12, "bold"),
+            text_color=TEXT_COLOR
+        )
+        self.label_lock_status_box.pack(pady=2)
+
+        self.label_fringes_since_locking = ctk.CTkLabel(
+            self.lock_box_frame,
+            text="Fringes since locking: n/a",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_fringes_since_locking.pack(pady=2)
+
+        self.label_correction_since_locking = ctk.CTkLabel(
+            self.lock_box_frame,
+            text="Correction since locking: n/a",
+            font=("Arial", 12),
+            text_color=TEXT_COLOR
+        )
+        self.label_correction_since_locking.pack(pady=2)
+
+        self.btn_lock_box = ctk.CTkButton(
+            self.lock_box_frame,
+            text="LOCK",
+            command=self.toggle_lock,
+            fg_color=TEXT_COLOR,
+            font=("Arial", 12, "bold")
+        )
+        self.btn_lock_box.pack(pady=(6, 8))
 
         channel_text = (
             f"Channels: S1={PHOTODIODE_CHANNEL_S1}, "
@@ -2535,6 +2581,7 @@ class HomodyneGui:
     def update_stage_position_once(self):
         if self.stage_connected and self.stage is not None:
             pos = self.stage.get_position()
+            self.stage_position_mm = pos
             self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
@@ -2549,6 +2596,7 @@ class HomodyneGui:
         try:
             if self.stage_connected and self.stage is not None:
                 pos = self.stage.get_position()
+                self.stage_position_mm = pos
                 self.label_stage_position.configure(
                     text=f"Stage Position: {pos:.6f} mm"
                 )
@@ -3135,6 +3183,22 @@ class HomodyneGui:
                 )
 
             self.update_lock_display(sample, distance_mm)
+
+            if self.lock_active:
+                fringes_diff = single_fringes - self.lock_ref_single_fringes
+                self.label_fringes_since_locking.configure(
+                    text=f"Fringes since locking: {fringes_diff:+d}"
+                )
+                if self.stage_connected and self.stage is not None:
+                    diff_mm = self.stage_position_mm - self.lock_stage_position_mm
+                    self.label_correction_since_locking.configure(
+                        text=f"Correction since locking: {diff_mm:+.6f} mm"
+                    )
+                else:
+                    self.label_correction_since_locking.configure(
+                        text="Correction since locking: n/a"
+                    )
+
             self.update_comparison_labels()
 
             self.update_plot()
@@ -3379,7 +3443,6 @@ class HomodyneGui:
         # Reset homodyne counter so direction change (Lissajous) and fringes are measured starting from here
         if self.monitor is not None and self.monitor.counter is not None:
             self.monitor.counter.reset()
-            self.monitor.single_counter.reset()
             self.monitor.s2_visibility_counter.reset()
 
         self.lock_active = True
@@ -3389,10 +3452,26 @@ class HomodyneGui:
         self.latest_sample = None
         self.latest_distance_mm = 0.0
 
+        # Save S1 fringe count when lock is pressed!
+        if self.monitor is not None and self.monitor.single_counter is not None:
+            self.lock_ref_single_fringes = self.monitor.single_counter.accumulated_fringes
+        else:
+            self.lock_ref_single_fringes = 0
+
         self.btn_lock.configure(
             text="UNLOCK",
             fg_color=GREEN_COLOR
         )
+        if hasattr(self, 'btn_lock_box'):
+            self.btn_lock_box.configure(
+                text="UNLOCK",
+                fg_color=GREEN_COLOR
+            )
+            self.label_lock_status_box.configure(
+                text="Lock Status: active",
+                text_color=GREEN_COLOR
+            )
+
         self.label_lock_status.configure(
             text="Lock: on",
             text_color=GREEN_COLOR
@@ -3414,6 +3493,21 @@ class HomodyneGui:
             text="LOCK",
             fg_color=TEXT_COLOR
         )
+        if hasattr(self, 'btn_lock_box'):
+            self.btn_lock_box.configure(
+                text="LOCK",
+                fg_color=TEXT_COLOR
+            )
+            self.label_lock_status_box.configure(
+                text="Lock Status: off",
+                text_color=TEXT_COLOR
+            )
+            self.label_fringes_since_locking.configure(
+                text="Fringes since locking: n/a"
+            )
+            self.label_correction_since_locking.configure(
+                text="Correction since locking: n/a"
+            )
         self.label_lock_status.configure(
             text="Lock: off",
             text_color=TEXT_COLOR
@@ -3503,8 +3597,26 @@ class HomodyneGui:
             return
 
         # Check if a fringe was counted
-        # "wenn ein fringe gezählt wird, soll geschaut werden ob es forward oder backward war und dann die stage um die distanz in die jeweils andere richtung zurückbewegt werden"
+        # "wenn ein fringe gezählt wird..."
         if sample is None or sample.signed_fringes == 0:
+            return
+
+        # Check if direction is detected
+        # "wenn fringes detektiert und keine richtung detektiert schreibe: fringe but still, so no correction"
+        if sample.direction not in ["forward", "backward"]:
+            self.label_lock_status.configure(
+                text="Lock: Fringe but Still, so no correction",
+                text_color=ORANGE_COLOR
+            )
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text="Lock Status: Fringe but Still, so no correction",
+                    text_color=ORANGE_COLOR
+                )
+            self.status.configure(
+                text="Status: Fringe but Still, so no correction",
+                text_color=ORANGE_COLOR
+            )
             return
 
         now = time.time()
@@ -3518,10 +3630,13 @@ class HomodyneGui:
         if fringe_distance_mm is None:
             fringe_distance_mm = 0.000316
         correction_step_mm = -STAGE_CORRECTION_SIGN * (sample.signed_fringes * fringe_distance_mm)
-        current_position_mm = self.stage.get_position()
+        
+        # Calculate target relative to the saved lock position reference (not current_position_mm)
+        # "aber habe die position auf der ich locke gespeichert und gehe immer wieder dahin zurück und nimm das als referenz"
         target_position_mm = self.stage.clamp_position(
-            current_position_mm + correction_step_mm
+            self.lock_stage_position_mm + correction_step_mm
         )
+        current_position_mm = self.stage.get_position()
         actual_correction_mm = target_position_mm - current_position_mm
 
         if abs(actual_correction_mm) < 1e-12:
@@ -3529,6 +3644,11 @@ class HomodyneGui:
                 text="Lock: correction blocked by stage limit",
                 text_color=RED_COLOR
             )
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text="Lock Status: blocked by limit",
+                    text_color=RED_COLOR
+                )
             return
 
         self.lock_last_correction_time = now
@@ -3541,12 +3661,22 @@ class HomodyneGui:
                 text="Lock: stage correction failed",
                 text_color=RED_COLOR
             )
+            if hasattr(self, 'label_lock_status_box'):
+                self.label_lock_status_box.configure(
+                    text="Lock Status: correction failed",
+                    text_color=RED_COLOR
+                )
             return
 
         self.label_lock_status.configure(
             text=f"Lock: correcting {actual_correction_mm:+.9f} mm",
             text_color=ORANGE_COLOR
         )
+        if hasattr(self, 'label_lock_status_box'):
+            self.label_lock_status_box.configure(
+                text=f"Lock Status: correcting {actual_correction_mm:+.9f} mm",
+                text_color=ORANGE_COLOR
+            )
         self.label_stage_status.configure(
             text="Stage: lock correction running",
             text_color=ORANGE_COLOR
