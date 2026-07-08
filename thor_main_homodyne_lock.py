@@ -3353,29 +3353,59 @@ class HomodyneGui:
             # Save original position
             start_pos = self.stage.get_position()
             
-            # Move stage 0.002 mm forward
+            # Move stage 0.002 mm forward (with verification and retries)
             forward_target = self.stage.clamp_position(start_pos + 0.002)
-            if self.stage.move_absolute(forward_target):
-                # Wait for move to finish
+            moved_forward = False
+            for retry in range(3):
+                # Ensure stage has stopped before commanding move
                 while self.stage.is_moving and self.monitoring:
-                    time.sleep(0.01)
+                    time.sleep(0.05)
+                time.sleep(0.1)
+                
+                if self.stage.move_absolute(forward_target):
+                    time.sleep(0.05)
+                    while self.stage.is_moving and self.monitoring:
+                        time.sleep(0.01)
+                    
+                    # Verify arrival
+                    curr_pos = self.stage.get_position()
+                    if abs(curr_pos - forward_target) < 0.0001:
+                        moved_forward = True
+                        break
+                    else:
+                        print(f"DEBUG: Sweep forward retry {retry} ended at {curr_pos}, target {forward_target}")
+            
+            if not moved_forward:
+                self.root.after(0, lambda: self.status.configure(
+                    text="Status: Sweep forward move failed!",
+                    text_color=RED_COLOR
+                ))
             
             # Tiny pause to let Kinesis status settle and clear command queues
             time.sleep(0.2)
                     
-            # Move stage back to start_pos (with retry)
+            # Move stage back to start_pos (with verification and retries)
             moved_back = False
-            for retry in range(3):
-                if self.stage.move_absolute(start_pos):
-                    moved_back = True
-                    break
-                time.sleep(0.2)
-                
-            if moved_back:
-                # Wait for move to finish
+            for retry in range(5):
+                # Ensure stage has stopped before commanding move
                 while self.stage.is_moving and self.monitoring:
-                    time.sleep(0.01)
-            else:
+                    time.sleep(0.05)
+                time.sleep(0.1)
+                
+                if self.stage.move_absolute(start_pos):
+                    time.sleep(0.05)
+                    while self.stage.is_moving and self.monitoring:
+                        time.sleep(0.01)
+                    
+                    # Verify arrival
+                    curr_pos = self.stage.get_position()
+                    if abs(curr_pos - start_pos) < 0.0001:
+                        moved_back = True
+                        break
+                    else:
+                        print(f"DEBUG: Sweep return retry {retry} ended at {curr_pos}, target {start_pos}")
+                
+            if not moved_back:
                 self.root.after(0, lambda: self.status.configure(
                     text="Status: Sweep return move failed!",
                     text_color=RED_COLOR
