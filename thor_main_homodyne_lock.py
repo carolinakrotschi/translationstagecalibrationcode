@@ -303,10 +303,10 @@ class SingleSignalFringeCounter:
             EXPECTED_FRINGE_AMPLITUDE_V
         )
         self.fringe_rise_threshold_voltage = (
-            detection_amplitude_voltage * FRINGE_RISE_FRACTION
+            detection_amplitude_voltage * 0.98
         )
         self.fringe_rearm_threshold_voltage = (
-            detection_amplitude_voltage * FRINGE_REARM_FRACTION
+            detection_amplitude_voltage * 0.98
         )
         self.fringes_visible = visible_amplitude
 
@@ -3318,64 +3318,126 @@ class HomodyneGui:
             )
             return
 
+        # Start the background sweep calibration thread
+        threading.Thread(
+            target=self.lock_calibration_sweep_worker,
+            daemon=True
+        ).start()
 
-
-        # Keep stage stationary
-        if self.stage_connected and self.stage is not None:
-            self.stage.stop()
-            self.lock_stage_position_mm = self.stage.get_position()
-        else:
-            self.lock_stage_position_mm = 0.0
-
-        # Reset homodyne counter so direction change (Lissajous) and fringes are measured starting from here
-        if self.monitor is not None and self.monitor.counter is not None:
-            self.monitor.counter.set_signal_visibility(True, True)
-            if self.monitor.single_counter is not None:
-                self.monitor.single_counter.fringes_visible = True
-            if self.monitor.s2_visibility_counter is not None:
-                self.monitor.s2_visibility_counter.fringes_visible = True
-            self.monitor.counter.reset()
-            self.monitor.s2_visibility_counter.reset()
-
-        self.lock_active = True
-        self.lock_reference_distance_mm = 0.0
-        self.lock_reference_phase_rad = 0.0
-        self.lock_reference_fringes = 0
-        self.latest_sample = None
-        self.latest_distance_mm = 0.0
-
-        # Save S1 fringe count when lock is pressed!
-        if self.monitor is not None and self.monitor.single_counter is not None:
-            self.lock_ref_single_fringes = self.monitor.single_counter.accumulated_fringes
-        else:
-            self.lock_ref_single_fringes = 0
-
-        self.btn_lock.configure(
-            text="UNLOCK",
-            fg_color=GREEN_COLOR
-        )
-        if hasattr(self, 'btn_lock_box'):
-            self.btn_lock_box.configure(
-                text="UNLOCK",
-                fg_color=GREEN_COLOR
-            )
-            self.label_lock_status_box.configure(
-                text="Lock Status: active",
-                text_color=GREEN_COLOR
-            )
-
-        self.label_lock_status.configure(
-            text="Lock: on",
-            text_color=GREEN_COLOR
-        )
-        self.status.configure(
-            text="Status: lock reference set (counter reset)",
-            text_color=GREEN_COLOR
-        )
-        self.update_lock_display(
-            self.latest_sample,
-            self.latest_distance_mm
-        )
+    def lock_calibration_sweep_worker(self):
+        try:
+            self.root.after(0, lambda: self.status.configure(
+                text="Status: Sweep calibration running...",
+                text_color=ORANGE_COLOR
+            ))
+            
+            # Temporary list for photodiode samples during sweep
+            sweep_samples = []
+            
+            # Flag to control photodiode reader thread
+            collecting = [True]
+            
+            def collect_loop():
+                while collecting[0]:
+                    if self.monitoring and self.stage_connected and self.monitor is not None:
+                        try:
+                            r1, r2 = self.monitor.reader.read()
+                            sweep_samples.append((r1, r2))
+                        except Exception:
+                            pass
+                    time.sleep(SAMPLE_INTERVAL_S)
+                    
+            collector_thread = threading.Thread(target=collect_loop, daemon=True)
+            collector_thread.start()
+            
+            # Save original position
+            start_pos = self.stage.get_position()
+            
+            # Move stage 0.002 mm forward
+            forward_target = self.stage.clamp_position(start_pos + 0.002)
+            if self.stage.move_absolute(forward_target):
+                # Wait for move to finish
+                while self.stage.is_moving and self.monitoring:
+                    time.sleep(0.01)
+                    
+            # Move stage back to start_pos
+            if self.stage.move_absolute(start_pos):
+                # Wait for move to finish
+                while self.stage.is_moving and self.monitoring:
+                    time.sleep(0.01)
+                    
+            # Stop collection
+            collecting[0] = False
+            collector_thread.join(timeout=1.0)
+            
+            # Calibrate using the collected sweep samples
+            if sweep_samples and self.monitoring and self.monitor is not None:
+                self.monitor.counter.calibrate_from_samples(sweep_samples)
+                s1_vals = [s[0] for s in sweep_samples]
+                s2_vals = [s[1] for s in sweep_samples]
+                self.monitor.single_counter.calibrate(s1_vals)
+                self.monitor.s2_visibility_counter.calibrate(s2_vals)
+                
+                # Apply strict threshold rule to SingleSignalFringeCounter:
+                self.monitor.single_counter.fringe_rise_threshold_voltage = (
+                    self.monitor.single_counter.fringe_amplitude_voltage * 0.98
+                )
+                self.monitor.single_counter.fringe_rearm_threshold_voltage = (
+                    self.monitor.single_counter.fringe_amplitude_voltage * 0.98
+                )
+                
+                self.monitor.counter.set_signal_visibility(
+                    self.monitor.single_counter.fringes_visible,
+                    self.monitor.s2_visibility_counter.fringes_visible
+                )
+                
+            # Reset counters so this sweep is NOT counted in the lock fringes
+            if self.monitor is not None:
+                self.monitor.counter.reset()
+                self.monitor.single_counter.reset()
+                self.monitor.s2_visibility_counter.reset()
+                
+            def activate():
+                self.lock_stage_position_mm = start_pos
+                self.lock_ref_single_fringes = 0
+                self.lock_active = True
+                
+                self.lock_reference_distance_mm = 0.0
+                self.lock_reference_phase_rad = 0.0
+                self.lock_reference_fringes = 0
+                self.latest_sample = None
+                self.latest_distance_mm = 0.0
+                
+                self.btn_lock.configure(
+                    text="UNLOCK",
+                    fg_color=GREEN_COLOR
+                )
+                if hasattr(self, 'btn_lock_box'):
+                    self.btn_lock_box.configure(
+                        text="UNLOCK",
+                        fg_color=GREEN_COLOR
+                    )
+                if hasattr(self, 'label_lock_status_box'):
+                    self.label_lock_status_box.configure(
+                        text="Lock Status: active",
+                        text_color=GREEN_COLOR
+                    )
+                self.label_lock_status.configure(
+                    text="Lock: on",
+                    text_color=GREEN_COLOR
+                )
+                self.status.configure(
+                    text="Status: locked",
+                    text_color=GREEN_COLOR
+                )
+                
+            self.root.after(0, activate)
+            
+        except Exception as e:
+            self.root.after(0, lambda err=str(e): self.status.configure(
+                text=f"Status: Lock calibration failed: {err}",
+                text_color=RED_COLOR
+            ))
 
     #return everything to unlock state
     def disable_lock(self, update_status=True):
