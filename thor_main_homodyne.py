@@ -1792,7 +1792,9 @@ class HomodyneGui:
                         "Norm_S2",
                         "Phase_rad",
                         "Unwrapped_Phase_rad",
+                        "Lissajous_Distance_mm",
                         "Calculated_Distance_mm",
+                        "Fringe_Count",
                         "Stage_Position_mm"
                     ])
                     writer.writerows(self.recorded_data)
@@ -3178,6 +3180,9 @@ class HomodyneGui:
                     # Non-blocking read of the last queried stage position
                     stage_pos = self.stage.current_position if (self.stage_connected and self.stage is not None) else 0.0
                     s_obj = sample if ('sample' in locals() and sample is not None) else None
+                    cur_single_fringes = self.monitor.single_counter.accumulated_fringes if self.monitor else 0
+                    cur_single_distance = cur_single_fringes * self.fringe_distance_mm
+                    cur_phase_distance = distance_mm if ('distance_mm' in locals() and distance_mm is not None) else 0.0
                     self.recorded_data.append((
                         elapsed,
                         raw_s1,
@@ -3186,7 +3191,9 @@ class HomodyneGui:
                         s_obj.s2 if s_obj else 0.0,
                         s_obj.phase_rad if s_obj else 0.0,
                         s_obj.unwrapped_phase_rad if s_obj else 0.0,
-                        distance_mm if ('distance_mm' in locals() and distance_mm is not None) else 0.0,
+                        cur_phase_distance,
+                        cur_single_distance,
+                        cur_single_fringes,
                         stage_pos
                     ))
 
