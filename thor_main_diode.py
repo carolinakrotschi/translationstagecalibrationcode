@@ -50,6 +50,7 @@ MODE = "continuous"
 
 VELOCITY_MM_S = 0.0006
 TOTAL_DISTANCE_MM = 13.0
+REF_MEASUREMENT_DISTANCE_MM = 0.5
 
 VELOCITY_MM_S_STEPPED = 1.00
 STEP_SIZE_MM = 0.00001
@@ -1870,17 +1871,17 @@ class SideApp(ctk.CTk):
 
             # 7. Start 0.5 mm forward movement
             start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-            self.root.after(0, lambda: self.start_stage_move_by(0.5))
+            self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
             time.sleep(0.2)
 
-            # 8. Monitor distance and stop recording after 0.05 mm
+            # 8. Monitor distance and stop recording after the full measurement distance
             recording_stopped = False
             while self.stage_connected and self.stage is not None and self.stage.is_moving:
                 time.sleep(0.02)
                 current_pos = self.stage.get_position()
                 if current_pos is not None:
                     moved_dist = current_pos - start_pos
-                    if moved_dist >= 0.05:
+                    if moved_dist >= REF_MEASUREMENT_DISTANCE_MM:
                         if not recording_stopped:
                             self.root.after(0, self.toggle_recording)
                             recording_stopped = True
