@@ -1618,25 +1618,8 @@ class SideApp(ctk.CTk):
                 self.clean_voltage_history
             )
 
-        # Explicit y-limit scaling to visible artists only
-        visible_y_data = []
-        if self.plot_line_voltage.get_visible():
-            y_data = self.plot_line_voltage.get_ydata()
-            if len(y_data) > 0:
-                visible_y_data.extend(y_data)
-        if self.plot_line_clean.get_visible():
-            y_data = self.plot_line_clean.get_ydata()
-            if len(y_data) > 0:
-                visible_y_data.extend(y_data)
-                
-        if visible_y_data:
-            ymin, ymax = min(visible_y_data), max(visible_y_data)
-            yrange = ymax - ymin
-            padding = max(yrange * 0.05, 1e-4)
-            self.plot_axis.set_ylim(ymin - padding, ymax + padding)
-        else:
-            self.plot_axis.relim()
-            self.plot_axis.autoscale_view()
+        self.plot_axis.relim()
+        self.plot_axis.autoscale_view()
 
         self.plot_canvas.draw_idle()
 
