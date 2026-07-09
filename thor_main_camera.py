@@ -76,6 +76,7 @@ FRINGE_COOLDOWN = 0.08
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 MODE = "continuous"
 CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
+STAGE_STATUS_POLL_MS = 100
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -606,6 +607,11 @@ class InterferometerApp(ctk.CTk):
         self.update_comparison_labels()#renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
 
         self.update_stage_position_once()#reads the current stage position and updates the label, this is important to have the correct position at the beginning
+
+        self.after(
+            STAGE_STATUS_POLL_MS,
+            self.poll_stage_status
+        )
 
         # Start connection in a background thread so the GUI does not freeze during startup
         self.status.configure(
@@ -1397,6 +1403,20 @@ class InterferometerApp(ctk.CTk):
 
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
+            )
+
+    def poll_stage_status(self):
+
+        try:
+            if self.stage_connected:
+                pos = self.stage.get_position()
+                self.label_stage_position.configure(
+                    text=f"Stage Position: {pos:.6f} mm"
+                )
+        finally:
+            self.after(
+                STAGE_STATUS_POLL_MS,
+                self.poll_stage_status
             )
     # -----------------------------------------------------------------------------
     # 7.3 UPDATE STAGE MOVEMENT DISPLAY
