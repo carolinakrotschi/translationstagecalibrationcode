@@ -1214,14 +1214,14 @@ class HomodyneGui:
             text_color=TEXT_COLOR
         ).pack(side="left")
 
-        self.show_cleaned = True
+        self.show_cleaned = False
         self.btn_toggle_clean = ctk.CTkButton(
             plot_header_frame,
-            text="Cleaned Signal: ON",
+            text="Cleaned Signal: OFF",
             width=150,
             height=24,
             font=("Arial", 11),
-            fg_color=TEXT_COLOR,
+            fg_color="#555555",
             command=self.toggle_cleaned_signal
         )
         self.btn_toggle_clean.pack(side="right")
@@ -1262,7 +1262,7 @@ class HomodyneGui:
                     [],
                     [],
                     color=color,
-                    alpha=0.3,
+                    alpha=1.0,
                     label=label_raw
                 )[0]
                 self.plot_lines[key + '_clean'] = axis.plot(
@@ -1272,6 +1272,7 @@ class HomodyneGui:
                     linewidth=1.5,
                     label=label_clean
                 )[0]
+                self.plot_lines[key + '_clean'].set_visible(False)
                 self.plot_lines[key + '_fit'] = axis.plot(
                     [],
                     [],
