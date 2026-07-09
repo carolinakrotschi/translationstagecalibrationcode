@@ -3688,14 +3688,58 @@ class HomodyneGui:
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
         if len(self.clean_s1_history) == len(x):
             self.plot_lines['S1_raw_clean'].set_data(x, self.clean_s1_history)
-        self.plot_axes['S1_raw'].relim()
-        self.plot_axes['S1_raw'].autoscale_view()
+
+        # Explicit y-limit scaling for S1
+        s1_visible_y = []
+        if self.plot_lines['S1_raw'].get_visible():
+            y_vals = self.plot_lines['S1_raw'].get_ydata()
+            if len(y_vals) > 0:
+                s1_visible_y.extend(y_vals)
+        if self.plot_lines['S1_raw_clean'].get_visible():
+            y_vals = self.plot_lines['S1_raw_clean'].get_ydata()
+            if len(y_vals) > 0:
+                s1_visible_y.extend(y_vals)
+        if self.plot_lines['S1_raw_fit'].get_visible():
+            y_vals = self.plot_lines['S1_raw_fit'].get_ydata()
+            if len(y_vals) > 0:
+                s1_visible_y.extend(y_vals)
+                
+        if s1_visible_y:
+            ymin, ymax = min(s1_visible_y), max(s1_visible_y)
+            yrange = ymax - ymin
+            padding = max(yrange * 0.05, 1e-4)
+            self.plot_axes['S1_raw'].set_ylim(ymin - padding, ymax + padding)
+        else:
+            self.plot_axes['S1_raw'].relim()
+            self.plot_axes['S1_raw'].autoscale_view()
 
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
         if len(self.clean_s2_history) == len(x):
             self.plot_lines['S2_raw_clean'].set_data(x, self.clean_s2_history)
-        self.plot_axes['S2_raw'].relim()
-        self.plot_axes['S2_raw'].autoscale_view()
+
+        # Explicit y-limit scaling for S2
+        s2_visible_y = []
+        if self.plot_lines['S2_raw'].get_visible():
+            y_vals = self.plot_lines['S2_raw'].get_ydata()
+            if len(y_vals) > 0:
+                s2_visible_y.extend(y_vals)
+        if self.plot_lines['S2_raw_clean'].get_visible():
+            y_vals = self.plot_lines['S2_raw_clean'].get_ydata()
+            if len(y_vals) > 0:
+                s2_visible_y.extend(y_vals)
+        if self.plot_lines['S2_raw_fit'].get_visible():
+            y_vals = self.plot_lines['S2_raw_fit'].get_ydata()
+            if len(y_vals) > 0:
+                s2_visible_y.extend(y_vals)
+                
+        if s2_visible_y:
+            ymin, ymax = min(s2_visible_y), max(s2_visible_y)
+            yrange = ymax - ymin
+            padding = max(yrange * 0.05, 1e-4)
+            self.plot_axes['S2_raw'].set_ylim(ymin - padding, ymax + padding)
+        else:
+            self.plot_axes['S2_raw'].relim()
+            self.plot_axes['S2_raw'].autoscale_view()
 
         if not self.measuring or not self.monitor.counter.signals_visible():
             self.plot_lines['circle_trace'].set_data([], [])

@@ -1598,6 +1598,12 @@ class SideApp(ctk.CTk):
             self.plot_canvas.draw_idle()
             return
 
+        # Throttle plot drawing to at most once every 50ms (20 Hz)
+        now = time.time()
+        if now - getattr(self, '_last_plot_draw_time', 0.0) < 0.05:
+            return
+        self._last_plot_draw_time = now
+
         x = list(
             range(len(self.raw_voltage_history))
         )
@@ -1610,12 +1616,32 @@ class SideApp(ctk.CTk):
                 x,
                 self.clean_voltage_history
             )
-        self.plot_axis.relim()
-        self.plot_axis.autoscale_view()
+
+        # Explicit y-limit scaling to visible artists only
+        visible_y_data = []
+        if self.plot_line_voltage.get_visible():
+            y_data = self.plot_line_voltage.get_ydata()
+            if len(y_data) > 0:
+                visible_y_data.extend(y_data)
+        if self.plot_line_clean.get_visible():
+            y_data = self.plot_line_clean.get_ydata()
+            if len(y_data) > 0:
+                visible_y_data.extend(y_data)
+                
+        if visible_y_data:
+            ymin, ymax = min(visible_y_data), max(visible_y_data)
+            yrange = ymax - ymin
+            padding = max(yrange * 0.05, 1e-4)
+            self.plot_axis.set_ylim(ymin - padding, ymax + padding)
+        else:
+            self.plot_axis.relim()
+            self.plot_axis.autoscale_view()
+
         self.plot_canvas.draw_idle()
 
     def toggle_cleaned_signal(self):
         self.show_cleaned = not self.show_cleaned
+        self._last_plot_draw_time = 0.0
         if self.show_cleaned:
             self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
             self.plot_line_voltage.set_alpha(0.3)
