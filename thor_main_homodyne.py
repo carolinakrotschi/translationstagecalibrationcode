@@ -1234,14 +1234,14 @@ class HomodyneGui:
             }
 
             plot_specs = {
-                'S1_raw': ("S1 raw voltage", 'blue', 'S1'),
-                'S2_raw': ("S2 raw voltage", 'green', 'S2')
+                'S1_raw': ("S1 raw voltage", 'blue', 'S1 raw', 'S1 clean'),
+                'S2_raw': ("S2 raw voltage", 'green', 'S2 raw', 'S2 clean')
             }
 
             self.plot_lines = {}
             for key in ['S1_raw', 'S2_raw']:
                 axis = self.plot_axes[key]
-                title, color, label = plot_specs[key]
+                title, color, label_raw, label_clean = plot_specs[key]
                 axis.set_title(title, fontsize=9)
                 axis.grid(True, linestyle=':', alpha=0.6)
                 axis.set_ylabel("Voltage", fontsize=8)
@@ -1250,14 +1250,22 @@ class HomodyneGui:
                     [],
                     [],
                     color=color,
-                    label=label
+                    alpha=0.3,
+                    label=label_raw
+                )[0]
+                self.plot_lines[key + '_clean'] = axis.plot(
+                    [],
+                    [],
+                    color=color,
+                    linewidth=1.5,
+                    label=label_clean
                 )[0]
                 self.plot_lines[key + '_fit'] = axis.plot(
                     [],
                     [],
                     color='orange' if key == 'S1_raw' else 'magenta',
                     linestyle='--',
-                    label=label + ' fit'
+                    label=label_raw.split()[0] + ' fit'
                 )[0]
                 axis.legend(loc="upper right", prop={"size": 8})
 
@@ -1820,7 +1828,13 @@ class HomodyneGui:
             del self.lp_s1
         if hasattr(self, 'lp_s2'):
             del self.lp_s2
+        if hasattr(self, 'lp_clean_s1'):
+            del self.lp_clean_s1
+        if hasattr(self, 'lp_clean_s2'):
+            del self.lp_clean_s2
 
+        self.clean_s1_history = []
+        self.clean_s2_history = []
         self.latest_sample = None
         self.latest_distance_mm = None
         self.reset_calculation_display()
@@ -1872,6 +1886,12 @@ class HomodyneGui:
         self.last_error_text = None
         self.raw_s1_history = []
         self.raw_s2_history = []
+        self.clean_s1_history = []
+        self.clean_s2_history = []
+        self.baseline_samples = []
+        self.baseline_s1 = 0.0
+        self.baseline_s2 = 0.0
+        self.baseline_recorded = False
         self.calibration_raw_samples = []
         with self.sample_display_lock:
             self.pending_sample = None
@@ -3048,12 +3068,49 @@ class HomodyneGui:
             while self.monitoring:
                 raw_s1, raw_s2 = self.monitor.reader.read()
 
+                if not self.baseline_recorded:
+                    self.baseline_samples.append((raw_s1, raw_s2))
+                    self.root.after(
+                        0,
+                        lambda: self.status.configure(
+                            text="Status: recording baseline noise...",
+                            text_color=ORANGE_COLOR
+                        )
+                    )
+                    if len(self.baseline_samples) >= 200:
+                        self.baseline_s1 = sum(s[0] for s in self.baseline_samples) / len(self.baseline_samples)
+                        self.baseline_s2 = sum(s[1] for s in self.baseline_samples) / len(self.baseline_samples)
+                        self.baseline_recorded = True
+                        self.root.after(
+                            0,
+                            lambda: self.status.configure(
+                                text="Status: monitoring running",
+                                text_color=GREEN_COLOR
+                            )
+                        )
+
+                clean_s1 = raw_s1 - self.baseline_s1
+                clean_s2 = raw_s2 - self.baseline_s2
+
+                alpha = 0.3
+                if not hasattr(self, 'lp_clean_s1'):
+                    self.lp_clean_s1 = clean_s1
+                    self.lp_clean_s2 = clean_s2
+                else:
+                    self.lp_clean_s1 = alpha * clean_s1 + (1.0 - alpha) * self.lp_clean_s1
+                    self.lp_clean_s2 = alpha * clean_s2 + (1.0 - alpha) * self.lp_clean_s2
+
                 with self.sample_display_lock:
                     self.raw_s1_history.append(raw_s1)
                     self.raw_s2_history.append(raw_s2)
+                    self.clean_s1_history.append(self.lp_clean_s1)
+                    self.clean_s2_history.append(self.lp_clean_s2)
                     if len(self.raw_s1_history) > 300:
                         self.raw_s1_history.pop(0)
                         self.raw_s2_history.pop(0)
+                    if len(self.clean_s1_history) > 300:
+                        self.clean_s1_history.pop(0)
+                        self.clean_s2_history.pop(0)
 
                 if self.measuring:
                     if self.calibrating:
@@ -3069,7 +3126,7 @@ class HomodyneGui:
                                 )
                             )
 
-                        calibration_samples.append((raw_s1, raw_s2))
+                        calibration_samples.append((clean_s1, clean_s2))
                         elapsed_s = time.time() - calibration_start_time
                         
                         # Set progress text without double-appending raw history
@@ -3108,16 +3165,8 @@ class HomodyneGui:
                             )
                     else:
                         # Calibration is complete, do normal fringe counting
-                        alpha_lp = 0.3
-                        if not hasattr(self, 'lp_s1'):
-                            self.lp_s1 = raw_s1
-                            self.lp_s2 = raw_s2
-                        else:
-                            self.lp_s1 = alpha_lp * raw_s1 + (1.0 - alpha_lp) * self.lp_s1
-                            self.lp_s2 = alpha_lp * raw_s2 + (1.0 - alpha_lp) * self.lp_s2
-
-                        self.monitor.single_counter.update(self.lp_s1)
-                        sample = self.monitor.counter.update(self.lp_s1, self.lp_s2)
+                        self.monitor.single_counter.update(self.lp_clean_s1)
+                        sample = self.monitor.counter.update(self.lp_clean_s1, self.lp_clean_s2)
                         distance_mm = self.monitor.counter.signed_distance_mm()
 
                         with self.sample_display_lock:
@@ -3530,6 +3579,16 @@ class HomodyneGui:
         self.latest_distance_mm = None
         self.raw_s1_history = []
         self.raw_s2_history = []
+        self.clean_s1_history = []
+        self.clean_s2_history = []
+        self.baseline_samples = []
+        self.baseline_s1 = 0.0
+        self.baseline_s2 = 0.0
+        self.baseline_recorded = False
+        if hasattr(self, 'lp_clean_s1'):
+            del self.lp_clean_s1
+        if hasattr(self, 'lp_clean_s2'):
+            del self.lp_clean_s2
         with self.sample_display_lock:
             self.pending_sample = None
             self.pending_distance_mm = None
@@ -3560,6 +3619,8 @@ class HomodyneGui:
         if reset:
             self.plot_lines['S1_raw'].set_data([], [])
             self.plot_lines['S2_raw'].set_data([], [])
+            self.plot_lines['S1_raw_clean'].set_data([], [])
+            self.plot_lines['S2_raw_clean'].set_data([], [])
             self.plot_lines['S1_raw_fit'].set_data([], [])
             self.plot_lines['S2_raw_fit'].set_data([], [])
             self.plot_lines['S1_raw_fit'].set_visible(False)
@@ -3585,10 +3646,14 @@ class HomodyneGui:
         x = list(range(len(s1_hist)))
 
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
+        if len(self.clean_s1_history) == len(x):
+            self.plot_lines['S1_raw_clean'].set_data(x, self.clean_s1_history)
         self.plot_axes['S1_raw'].relim()
         self.plot_axes['S1_raw'].autoscale_view()
 
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
+        if len(self.clean_s2_history) == len(x):
+            self.plot_lines['S2_raw_clean'].set_data(x, self.clean_s2_history)
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
 

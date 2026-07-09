@@ -147,7 +147,10 @@ class SideApp(ctk.CTk):
         self.last_error_text = None
 
         self.raw_voltage_history = []
+        self.clean_voltage_history = []
         self.calibration_raw_samples = []
+        self.baseline_voltage = 0.0
+        self.baseline_recorded = False
         self.smoothed_voltage_history = []
         self.accumulated_fringes = 0
         #a bright state only counts after darkness
@@ -735,7 +738,15 @@ class SideApp(ctk.CTk):
             [],
             [],
             color="blue",
+            alpha=0.3,
             label="photodiode raw"
+        )[0]
+        self.plot_line_clean = self.plot_axis.plot(
+            [],
+            [],
+            color="blue",
+            linewidth=1.5,
+            label="photodiode clean"
         )[0]
         self.plot_axis.legend(loc="upper right", prop={"size": 8})
         self.plot_figure.subplots_adjust(
@@ -842,6 +853,30 @@ class SideApp(ctk.CTk):
 
         try:
             self.diode.connect()
+
+            # Record baseline for 1.0s (200 samples) before starting stage motion/calibration
+            self.after(
+                0,
+                lambda:
+                self.status.configure(
+                    text="Status: recording baseline noise...",
+                    text_color=ORANGE_COLOR
+                )
+            )
+            baseline_samples = []
+            for _ in range(200):
+                if not self.is_monitoring:
+                    return
+                sample = self.diode.read()
+                baseline_samples.append(sample.raw_voltage)
+                time.sleep(SAMPLE_INTERVAL_S)
+
+            if baseline_samples:
+                self.baseline_voltage = sum(baseline_samples) / len(baseline_samples)
+                self.baseline_recorded = True
+            else:
+                self.baseline_voltage = 0.0
+                self.baseline_recorded = True
 
             self.after(
                 0,
@@ -1477,6 +1512,20 @@ class SideApp(ctk.CTk):
         if len(self.raw_voltage_history) > RAW_HISTORY_LENGTH:
             self.raw_voltage_history.pop(0)
 
+        # Cleaned version: subtract baseline and apply low-pass filter
+        baseline = getattr(self, 'baseline_voltage', 0.0)
+        clean_voltage = raw_voltage - baseline
+        
+        alpha = 0.3
+        if not hasattr(self, 'clean_lp_voltage'):
+            self.clean_lp_voltage = clean_voltage
+        else:
+            self.clean_lp_voltage = alpha * clean_voltage + (1.0 - alpha) * self.clean_lp_voltage
+            
+        self.clean_voltage_history.append(self.clean_lp_voltage)
+        if len(self.clean_voltage_history) > RAW_HISTORY_LENGTH:
+            self.clean_voltage_history.pop(0)
+
     # -----------------------------------------------------------------------------
     # 8.5 LIVE VOLTAGE PLOT UPDATE
     # -----------------------------------------------------------------------------
@@ -1488,6 +1537,7 @@ class SideApp(ctk.CTk):
 
         if reset:
             self.plot_line_voltage.set_data([], [])
+            self.plot_line_clean.set_data([], [])
             self.plot_axis.relim()
             self.plot_axis.autoscale_view()
             self.plot_canvas.draw_idle()
@@ -1500,6 +1550,11 @@ class SideApp(ctk.CTk):
             x,
             self.raw_voltage_history
         )
+        if len(self.clean_voltage_history) == len(x):
+            self.plot_line_clean.set_data(
+                x,
+                self.clean_voltage_history
+            )
         self.plot_axis.relim()
         self.plot_axis.autoscale_view()
         self.plot_canvas.draw_idle()
@@ -1557,8 +1612,11 @@ class SideApp(ctk.CTk):
         self.latest_sample = None
         self.latest_voltage = 0.0
         self.raw_voltage_history = []
+        self.clean_voltage_history = []
         self.calibration_raw_samples = []
         self.smoothed_voltage_history = []
+        if hasattr(self, 'clean_lp_voltage'):
+            del self.clean_lp_voltage
         #defines what the values should look like after pressing reset
         self.accumulated_fringes = 0
         self.was_dark = False
