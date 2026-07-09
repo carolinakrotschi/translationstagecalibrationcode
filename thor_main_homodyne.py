@@ -2359,9 +2359,6 @@ class HomodyneGui:
             )
             return
 
-        if not self.measuring:
-            self.start_measurement()
-
         self.btn_ref_measurement.configure(state="disabled")
         
         import threading
@@ -2370,48 +2367,73 @@ class HomodyneGui:
     def ref_measurement_worker(self):
         import time
         try:
-            # 1. Wait for calibration to finish (max 6 seconds)
-            start_wait = time.time()
-            while self.calibrating and (time.time() - start_wait < 6.0):
-                time.sleep(0.1)
-
-            # If measurement was stopped, abort
-            if not self.measuring:
-                return
-
-            # Stop the stage if it is currently moving (e.g. from calibration phase)
+            # 1. Stop the stage if it is currently moving
             if self.stage_connected and self.stage is not None and self.stage.is_moving:
                 self.root.after(0, lambda: self.stop_stage())
                 time.sleep(0.5)
                 while self.stage_connected and self.stage is not None and self.stage.is_moving:
                     time.sleep(0.05)
 
-            # 2. Start recording
-            self.root.after(0, lambda: self.start_recording_for_ref())
-            time.sleep(0.5)
+            # 2. Make sure recording is off before starting calibration
+            if getattr(self, 'recording', False):
+                self.root.after(0, self.toggle_recording)
+                time.sleep(0.5)
 
-            # 3. Move 0.01 mm forward
-            self.root.after(0, lambda: self.start_stage_move_by(0.01))
+            # 3. Move 0.001 mm forward for fringe calibration
+            self.ref_cal_samples = []
+            self.ref_calibrating = True
+            
+            self.root.after(0, lambda: self.start_stage_move_by(0.001))
             time.sleep(0.2)
-
-            # Wait until stage is done moving
             while self.stage_connected and self.stage is not None and self.stage.is_moving:
                 time.sleep(0.05)
-
-            time.sleep(0.5)
-
-            # 4. Move 0.01 mm backward
-            self.root.after(0, lambda: self.start_stage_move_by(-0.01))
+                
+            self.ref_calibrating = False
             time.sleep(0.2)
 
-            # Wait until stage is done moving
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.05)
+            # 4. Process calibration samples
+            if self.ref_cal_samples:
+                self.monitor.counter.calibrate_from_samples(self.ref_cal_samples)
+                s1_vals = [s[0] for s in self.ref_cal_samples]
+                s2_vals = [s[1] for s in self.ref_cal_samples]
+                self.monitor.single_counter.calibrate(s1_vals)
+                self.monitor.s2_visibility_counter.calibrate(s2_vals)
+                self.monitor.counter.set_signal_visibility(
+                    self.monitor.single_counter.fringes_visible,
+                    self.monitor.s2_visibility_counter.fringes_visible
+                )
 
+            # 5. Reset fringe count
+            self.monitor.single_counter.reset()
+            self.monitor.s2_visibility_counter.reset()
+            self.monitor.counter.reset()
+
+            # 6. Start measurement / recording
+            self.root.after(0, self.start_measurement)
+            time.sleep(0.5)
+            self.root.after(0, self.toggle_recording)
             time.sleep(0.5)
 
-            # 5. Stop recording and save
-            self.root.after(0, lambda: self.stop_recording_and_save_for_ref())
+            # 7. Start 0.5 mm forward movement
+            start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
+            self.root.after(0, lambda: self.start_stage_move_by(0.5))
+            time.sleep(0.2)
+
+            # 8. Monitor distance and stop recording after 0.05 mm
+            recording_stopped = False
+            while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                time.sleep(0.02)
+                current_pos = self.stage.get_position()
+                if current_pos is not None:
+                    moved_dist = current_pos - start_pos
+                    if moved_dist >= 0.05:
+                        if not recording_stopped:
+                            self.root.after(0, self.toggle_recording)
+                            recording_stopped = True
+
+            # If the loop finished but we haven't stopped recording
+            if not recording_stopped and getattr(self, 'recording', False):
+                self.root.after(0, self.toggle_recording)
 
         finally:
             self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
@@ -3123,6 +3145,11 @@ class HomodyneGui:
                     self.raw_s2_history.append(raw_s2)
                     self.clean_s1_history.append(self.lp_clean_s1)
                     self.clean_s2_history.append(self.lp_clean_s2)
+
+                if getattr(self, 'ref_calibrating', False):
+                    if not hasattr(self, 'ref_cal_samples'):
+                        self.ref_cal_samples = []
+                    self.ref_cal_samples.append((clean_s1, clean_s2))
                     if len(self.raw_s1_history) > 300:
                         self.raw_s1_history.pop(0)
                         self.raw_s2_history.pop(0)

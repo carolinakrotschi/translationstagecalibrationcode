@@ -429,6 +429,19 @@ class SideApp(ctk.CTk):
             padx=1
         )
 
+        self.btn_ref_measurement = ctk.CTkButton(
+            self.target_button_frame,
+            text="Ref measurement",
+            width=140,
+            command=self.start_ref_measurement,
+            fg_color=TEXT_COLOR
+        )
+        self.btn_ref_measurement.grid(
+            row=0,
+            column=2,
+            padx=1
+        )
+
         self.btn_stop = ctk.CTkButton(
             self.target_button_frame,
             text="STOP STAGE",
@@ -439,7 +452,7 @@ class SideApp(ctk.CTk):
         )
         self.btn_stop.grid(
             row=0,
-            column=2,
+            column=3,
             padx=1
         )
 
@@ -1408,6 +1421,11 @@ class SideApp(ctk.CTk):
             sample.raw_voltage
         )
 
+        if getattr(self, 'ref_calibrating', False):
+            if not hasattr(self, 'ref_cal_samples'):
+                self.ref_cal_samples = []
+            self.ref_cal_samples.append(sample.raw_voltage)
+
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
         distance_um = distance_mm * 1000
         time_ps = (2 * distance_mm) / SPEED_OF_LIGHT_MM_PS
@@ -1773,6 +1791,106 @@ class SideApp(ctk.CTk):
         self.label_calibration_scale.configure(
             text="Fringe Amplitude: waiting"
         )
+
+    def start_ref_measurement(self):
+        from tkinter import messagebox
+        if not self.is_monitoring:
+            messagebox.showwarning(
+                "Messung",
+                "Bitte starten Sie zuerst das Monitoring (START MONITORING)."
+            )
+            return
+
+        self.btn_ref_measurement.configure(state="disabled")
+        
+        import threading
+        threading.Thread(target=self.ref_measurement_worker, daemon=True).start()
+
+    def ref_measurement_worker(self):
+        import time
+        try:
+            # 1. Stop the stage if it is currently moving
+            if self.stage_connected and self.stage is not None and self.stage.is_moving:
+                self.root.after(0, lambda: self.stop_stage())
+                time.sleep(0.5)
+                while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                    time.sleep(0.05)
+
+            # 2. Make sure recording is off before starting calibration
+            if getattr(self, 'recording', False):
+                self.root.after(0, self.toggle_recording)
+                time.sleep(0.5)
+
+            # 3. Move 0.001 mm forward for fringe calibration
+            self.ref_cal_samples = []
+            self.ref_calibrating = True
+            
+            self.root.after(0, lambda: self.start_stage_move_by(0.001))
+            time.sleep(0.2)
+            while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                time.sleep(0.05)
+                
+            self.ref_calibrating = False
+            time.sleep(0.2)
+
+            # 4. Process calibration samples
+            if self.ref_cal_samples:
+                fringe_min_voltage = min(self.ref_cal_samples)
+                fringe_max_voltage = max(self.ref_cal_samples)
+                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.01)
+                
+                self.apply_calibration_extrema(
+                    self.diode,
+                    fringe_min_voltage,
+                    fringe_max_voltage
+                )
+                self.configure_fringe_detection(
+                    fringe_amplitude_voltage
+                )
+                
+                value_range = fringe_max_voltage - fringe_min_voltage
+                self.dark_threshold = (
+                    fringe_min_voltage
+                    + value_range * DARK_LEVEL_FRACTION
+                )
+                self.bright_threshold = (
+                    fringe_min_voltage
+                    + value_range * BRIGHT_LEVEL_FRACTION
+                )
+                self.baseline_voltage = (fringe_min_voltage + fringe_max_voltage) / 2
+                self.baseline_recorded = True
+
+            # 5. Reset fringe count
+            self.accumulated_fringes = 0
+            self.was_dark = False
+
+            # 6. Start measurement / recording
+            self.root.after(0, self.toggle_recording)
+            time.sleep(0.5)
+
+            # 7. Start 0.5 mm forward movement
+            start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
+            self.root.after(0, lambda: self.start_stage_move_by(0.5))
+            time.sleep(0.2)
+
+            # 8. Monitor distance and stop recording after 0.05 mm
+            recording_stopped = False
+            while self.stage_connected and self.stage is not None and self.stage.is_moving:
+                time.sleep(0.02)
+                current_pos = self.stage.get_position()
+                if current_pos is not None:
+                    moved_dist = current_pos - start_pos
+                    if moved_dist >= 0.05:
+                        if not recording_stopped:
+                            self.root.after(0, self.toggle_recording)
+                            recording_stopped = True
+
+            # If the loop finished but we haven't stopped recording
+            if not recording_stopped and getattr(self, 'recording', False):
+                self.root.after(0, self.toggle_recording)
+
+        finally:
+            self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
         self.label_sample_count.configure(
             text="Accumulated Fringes Count: 0",
             text_color=TEXT_COLOR
