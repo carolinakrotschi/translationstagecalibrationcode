@@ -50,8 +50,6 @@ MODE = "continuous"
 
 VELOCITY_MM_S = 0.0006
 TOTAL_DISTANCE_MM = 13.0
-REF_MEASUREMENT_DISTANCE_MM = 0.5
-
 VELOCITY_MM_S_STEPPED = 1.00
 STEP_SIZE_MM = 0.00001
 STEPS = 100
@@ -427,19 +425,6 @@ class SideApp(ctk.CTk):
         self.btn_target_rel.grid(
             row=0,
             column=1,
-            padx=1
-        )
-
-        self.btn_ref_measurement = ctk.CTkButton(
-            self.target_button_frame,
-            text="Ref measurement",
-            width=140,
-            command=self.start_ref_measurement,
-            fg_color=TEXT_COLOR
-        )
-        self.btn_ref_measurement.grid(
-            row=0,
-            column=2,
             padx=1
         )
 
@@ -1422,11 +1407,6 @@ class SideApp(ctk.CTk):
             sample.raw_voltage
         )
 
-        if getattr(self, 'ref_calibrating', False):
-            if not hasattr(self, 'ref_cal_samples'):
-                self.ref_cal_samples = []
-            self.ref_cal_samples.append(sample.raw_voltage)
-
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
         distance_um = distance_mm * 1000
         time_ps = (2 * distance_mm) / SPEED_OF_LIGHT_MM_PS
@@ -1434,12 +1414,14 @@ class SideApp(ctk.CTk):
         if self.recording:
             elapsed = time.time() - self.recording_start_time
             clean_val = sample.raw_voltage - self.baseline_voltage
+            stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
             self.recorded_data.append((
                 elapsed,
                 sample.raw_voltage,
                 clean_val,
                 self.accumulated_fringes,
-                distance_mm
+                distance_mm,
+                stage_pos
             ))
 
         now = time.time()
@@ -1780,7 +1762,8 @@ class SideApp(ctk.CTk):
                         "Raw_Voltage_V",
                         "Clean_Voltage_V",
                         "Fringe_Count",
-                        "Calculated_Distance_mm"
+                        "Calculated_Distance_mm",
+                        "Stage_Position_mm"
                     ])
                     writer.writerows(self.recorded_data)
                 messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
@@ -1793,66 +1776,6 @@ class SideApp(ctk.CTk):
             text="Fringe Amplitude: waiting"
         )
 
-    def start_ref_measurement(self):
-        from tkinter import messagebox
-        if not self.is_monitoring:
-            messagebox.showwarning(
-                "Messung",
-                "Bitte starten Sie zuerst das Monitoring (START MONITORING)."
-            )
-            return
-
-        self.btn_ref_measurement.configure(state="disabled")
-        
-        import threading
-        threading.Thread(target=self.ref_measurement_worker, daemon=True).start()
-
-    def ref_measurement_worker(self):
-        import time
-        try:
-            # 1. Stop the stage if it is currently moving
-            if self.stage_connected and self.stage is not None and self.stage.is_moving:
-                self.root.after(0, lambda: self.stop_stage())
-                time.sleep(0.5)
-                while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                    time.sleep(0.05)
-
-            # 2. Make sure recording is off before starting calibration
-            if getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-                time.sleep(0.5)
-
-            # 3. Reset fringe count
-            self.accumulated_fringes = 0
-            self.was_dark = False
-
-            # 4. Start measurement / recording
-            self.root.after(0, self.toggle_recording)
-            time.sleep(0.5)
-
-            # 5. Start 0.5 mm forward movement
-            start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-            self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
-            time.sleep(0.2)
-
-            # 6. Monitor distance and stop recording after the full measurement distance
-            recording_stopped = False
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.02)
-                current_pos = self.stage.get_position()
-                if current_pos is not None:
-                    moved_dist = current_pos - start_pos
-                    if moved_dist >= REF_MEASUREMENT_DISTANCE_MM:
-                        if not recording_stopped:
-                            self.root.after(0, self.toggle_recording)
-                            recording_stopped = True
-
-            # If the loop finished but we haven't stopped recording
-            if not recording_stopped and getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-
-        finally:
-            self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
         self.label_sample_count.configure(
             text="Accumulated Fringes Count: 0",
             text_color=TEXT_COLOR

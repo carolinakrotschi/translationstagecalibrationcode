@@ -56,7 +56,6 @@ FRINGE_COOLDOWN = max(0.04, MAX_FRINGE_WIDTH_FRAMES * SAMPLE_INTERVAL_S)
 MODE = "continuous"
 VELOCITY_MM_S = 0.0006
 TOTAL_DISTANCE_MM = 13.0
-REF_MEASUREMENT_DISTANCE_MM = 0.5
 
 VELOCITY_MM_S_STEPPED = 1.00
 STEP_SIZE_MM = 0.00001
@@ -1132,15 +1131,6 @@ class HomodyneGui:
             fg_color=TEXT_COLOR
         )
         self.btn_target_rel.grid(row=0, column=1, padx=1, sticky="ew")
-
-        self.btn_ref_measurement = ctk.CTkButton(
-            self.target_button_frame,
-            text="Ref Measurement",
-            width=120,
-            command=self.start_ref_measurement,
-            fg_color=TEXT_COLOR
-        )
-        self.btn_ref_measurement.grid(row=0, column=2, padx=1, sticky="ew")
 
         self.btn_stop = ctk.CTkButton(
             self.target_button_frame,
@@ -2406,114 +2396,6 @@ class HomodyneGui:
             return
         self.start_stage_move_by(distance_mm)
 
-    def start_ref_measurement(self):
-        from tkinter import messagebox
-        if not self.monitoring:
-            messagebox.showwarning(
-                "Messung",
-                "Bitte starten Sie zuerst das Photodioden-Monitoring (START MONITORING)."
-            )
-            return
-
-        self.btn_ref_measurement.configure(state="disabled")
-        
-        import threading
-        threading.Thread(target=self.ref_measurement_worker, daemon=True).start()
-
-    def ref_measurement_worker(self):
-        import time
-        try:
-            # 1. Stop the stage if it is currently moving
-            if self.stage_connected and self.stage is not None and self.stage.is_moving:
-                self.root.after(0, lambda: self.stop_stage())
-                time.sleep(0.5)
-                while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                    time.sleep(0.05)
-
-            # 2. Make sure recording is off before starting calibration
-            if getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-                time.sleep(0.5)
-
-            # 3. Start measurement before collecting the fringe calibration samples
-            self.root.after(0, self.start_measurement)
-            while self.monitoring and self.calibrating:
-                time.sleep(0.05)
-
-            # 4. Move 0.001 mm forward for fringe calibration
-            self.ref_cal_samples = []
-            self.ref_calibrating = True
-            
-            self.root.after(0, lambda: self.start_stage_move_by(0.001))
-            time.sleep(0.2)
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.05)
-                
-            self.ref_calibrating = False
-            time.sleep(0.2)
-
-            # 5. Process calibration samples
-            if self.ref_cal_samples:
-                self.monitor.counter.calibrate_from_samples(self.ref_cal_samples)
-                s1_vals = [s[0] for s in self.ref_cal_samples]
-                s2_vals = [s[1] for s in self.ref_cal_samples]
-                self.monitor.single_counter.calibrate(s1_vals)
-                self.monitor.s2_visibility_counter.calibrate(s2_vals)
-                self.monitor.counter.set_signal_visibility(
-                    self.monitor.single_counter.fringes_visible,
-                    self.monitor.s2_visibility_counter.fringes_visible
-                )
-
-            # 6. Reset fringe count
-            self.monitor.single_counter.reset()
-            self.monitor.s2_visibility_counter.reset()
-            self.monitor.counter.reset()
-
-            # 7. Start recording after the calibration phase from start_measurement is complete
-            self.root.after(0, self.toggle_recording)
-            time.sleep(0.5)
-
-            # 8. Start 0.5 mm forward movement
-            start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-            self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
-            time.sleep(0.2)
-
-            # 9. Monitor distance and stop recording after the full measurement distance
-            recording_stopped = False
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.02)
-                current_pos = self.stage.get_position()
-                if current_pos is not None:
-                    moved_dist = current_pos - start_pos
-                    if moved_dist >= REF_MEASUREMENT_DISTANCE_MM:
-                        if not recording_stopped:
-                            self.root.after(0, self.toggle_recording)
-                            recording_stopped = True
-
-            # If the loop finished but we haven't stopped recording
-            if not recording_stopped and getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-
-        finally:
-            self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
-
-    def start_recording_for_ref(self):
-        self.recorded_data = []
-        self.recording_start_time = time.time()
-        self.recording = True
-        self.btn_record.configure(
-            text="REC ● STOP",
-            fg_color=RED_COLOR
-        )
-
-    def stop_recording_and_save_for_ref(self):
-        self.recording = False
-        self.btn_record.configure(
-            text="START RECORDING",
-            fg_color="#555555"
-        )
-        self.save_recorded_data()
-
     # -----------------------------------------------------------------------------
     # 5.9.7 STOP STAGE ACTION
     # -----------------------------------------------------------------------------
@@ -3222,17 +3104,6 @@ class HomodyneGui:
                     self.raw_s2_history.append(raw_s2)
                     self.clean_s1_history.append(self.lp_clean_s1)
                     self.clean_s2_history.append(self.lp_clean_s2)
-
-                if getattr(self, 'ref_calibrating', False):
-                    if not hasattr(self, 'ref_cal_samples'):
-                        self.ref_cal_samples = []
-                    self.ref_cal_samples.append((clean_s1, clean_s2))
-                    if len(self.raw_s1_history) > 300:
-                        self.raw_s1_history.pop(0)
-                        self.raw_s2_history.pop(0)
-                    if len(self.clean_s1_history) > 300:
-                        self.clean_s1_history.pop(0)
-                        self.clean_s2_history.pop(0)
 
                 if self.measuring or self.lock_active:
                     if self.calibrating:

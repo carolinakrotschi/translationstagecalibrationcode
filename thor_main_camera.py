@@ -76,7 +76,6 @@ FRINGE_COOLDOWN = 0.08
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 MODE = "continuous"
 CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
-REF_MEASUREMENT_DISTANCE_MM = 0.5
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -365,19 +364,6 @@ class InterferometerApp(ctk.CTk):
         self.btn_target_rel.grid(
             row=0,
             column=1,
-            padx=1
-        )
-
-        self.btn_ref_measurement = ctk.CTkButton(
-            self.target_button_frame,
-            text="Ref measurement",
-            width=140,
-            command=self.start_ref_measurement,
-            fg_color=TEXT_COLOR
-        )
-        self.btn_ref_measurement.grid(
-            row=0,
-            column=2,
             padx=1
         )
 
@@ -887,72 +873,14 @@ class InterferometerApp(ctk.CTk):
                         "Relative_Time_s",
                         "Intensity",
                         "Fringe_Count",
-                        "Calculated_Distance_mm"
+                        "Calculated_Distance_mm",
+                        "Stage_Position_mm"
                     ])
                     writer.writerows(self.recorded_data)
                 messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
             except Exception as e:
                 messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
 
-    def start_ref_measurement(self):
-        from tkinter import messagebox
-        if not self.is_monitoring:
-            messagebox.showwarning(
-                "Messung",
-                "Bitte starten Sie zuerst das Monitoring (START MONITORING)."
-            )
-            return
-
-        self.btn_ref_measurement.configure(state="disabled")
-        
-        import threading
-        threading.Thread(target=self.ref_measurement_worker, daemon=True).start()
-
-    def ref_measurement_worker(self):
-        import time
-        try:
-            # 1. Stop the stage if it is currently moving
-            if self.stage_connected and self.stage is not None and self.stage.is_moving:
-                self.root.after(0, lambda: self.stop_stage())
-                time.sleep(0.5)
-                while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                    time.sleep(0.05)
-
-            # 2. Make sure recording is off before starting calibration
-            if getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-                time.sleep(0.5)
-
-            # 3. Reset fringe count
-            self.accumulated_fringes = 0
-
-            # 4. Start measurement / recording
-            self.root.after(0, self.toggle_recording)
-            time.sleep(0.5)
-
-            # 5. Start 0.5 mm forward movement
-            start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-            self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
-            time.sleep(0.2)
-
-            # 6. Monitor distance and stop recording after the full measurement distance
-            recording_stopped = False
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.02)
-                current_pos = self.stage.get_position()
-                if current_pos is not None:
-                    moved_dist = current_pos - start_pos
-                    if moved_dist >= REF_MEASUREMENT_DISTANCE_MM:
-                        if not recording_stopped:
-                            self.root.after(0, self.toggle_recording)
-                            recording_stopped = True
-
-            # If the loop finished but we haven't stopped recording
-            if not recording_stopped and getattr(self, 'recording', False):
-                self.root.after(0, self.toggle_recording)
-
-        finally:
-            self.root.after(0, lambda: self.btn_ref_measurement.configure(state="normal"))
     # -----------------------------------------------------------------------------
     # 6.1 MOVE STAGE TO AN ABSOLUTE POSITION
     # -----------------------------------------------------------------------------
@@ -1743,11 +1671,6 @@ class InterferometerApp(ctk.CTk):
 
                 fringe_counted = False
 
-                if getattr(self, 'ref_calibrating', False):
-                    if not hasattr(self, 'ref_cal_samples'):
-                        self.ref_cal_samples = []
-                    self.ref_cal_samples.append(intensity)
-
                 if self.calibrating:
 
                     if (not self.calibration_motion_started
@@ -1847,11 +1770,13 @@ class InterferometerApp(ctk.CTk):
 
             if self.recording:
                 elapsed = time.time() - self.recording_start_time
+                stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
                 self.recorded_data.append((
                     elapsed,
                     intensity,
                     self.accumulated_fringes,
-                    dist_mm
+                    dist_mm,
+                    stage_pos
                 ))
 
             dist_um = dist_mm * 1000
