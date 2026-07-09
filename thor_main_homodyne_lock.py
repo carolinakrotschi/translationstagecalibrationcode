@@ -3892,15 +3892,19 @@ class HomodyneGui:
         x = list(range(len(s1_hist)))
 
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
-        if len(self.clean_s1_history) == len(x):
+        if self.show_cleaned and len(self.clean_s1_history) == len(x):
             self.plot_lines['S1_raw_clean'].set_data(x, self.clean_s1_history)
+        else:
+            self.plot_lines['S1_raw_clean'].set_data([], [])
 
         self.plot_axes['S1_raw'].relim()
         self.plot_axes['S1_raw'].autoscale_view()
 
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
-        if len(self.clean_s2_history) == len(x):
+        if self.show_cleaned and len(self.clean_s2_history) == len(x):
             self.plot_lines['S2_raw_clean'].set_data(x, self.clean_s2_history)
+        else:
+            self.plot_lines['S2_raw_clean'].set_data([], [])
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
 

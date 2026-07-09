@@ -1606,11 +1606,13 @@ class SideApp(ctk.CTk):
             x,
             self.raw_voltage_history
         )
-        if len(self.clean_voltage_history) == len(x):
+        if self.show_cleaned and len(self.clean_voltage_history) == len(x):
             self.plot_line_clean.set_data(
                 x,
                 self.clean_voltage_history
             )
+        else:
+            self.plot_line_clean.set_data([], [])
 
         self.plot_axis.relim()
         self.plot_axis.autoscale_view()
