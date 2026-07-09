@@ -1822,59 +1822,20 @@ class SideApp(ctk.CTk):
                 self.root.after(0, self.toggle_recording)
                 time.sleep(0.5)
 
-            # 3. Move 0.001 mm forward for fringe calibration
-            self.ref_cal_samples = []
-            self.ref_calibrating = True
-            
-            self.root.after(0, lambda: self.start_stage_move_by(0.001))
-            time.sleep(0.2)
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.05)
-                
-            self.ref_calibrating = False
-            time.sleep(0.2)
-
-            # 4. Process calibration samples
-            if self.ref_cal_samples:
-                fringe_min_voltage = min(self.ref_cal_samples)
-                fringe_max_voltage = max(self.ref_cal_samples)
-                fringe_amplitude_voltage = max((fringe_max_voltage - fringe_min_voltage) / 2, 0.01)
-                
-                self.apply_calibration_extrema(
-                    self.diode,
-                    fringe_min_voltage,
-                    fringe_max_voltage
-                )
-                self.configure_fringe_detection(
-                    fringe_amplitude_voltage
-                )
-                
-                value_range = fringe_max_voltage - fringe_min_voltage
-                self.dark_threshold = (
-                    fringe_min_voltage
-                    + value_range * DARK_LEVEL_FRACTION
-                )
-                self.bright_threshold = (
-                    fringe_min_voltage
-                    + value_range * BRIGHT_LEVEL_FRACTION
-                )
-                self.baseline_voltage = (fringe_min_voltage + fringe_max_voltage) / 2
-                self.baseline_recorded = True
-
-            # 5. Reset fringe count
+            # 3. Reset fringe count
             self.accumulated_fringes = 0
             self.was_dark = False
 
-            # 6. Start measurement / recording
+            # 4. Start measurement / recording
             self.root.after(0, self.toggle_recording)
             time.sleep(0.5)
 
-            # 7. Start 0.5 mm forward movement
+            # 5. Start 0.5 mm forward movement
             start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
             self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
             time.sleep(0.2)
 
-            # 8. Monitor distance and stop recording after the full measurement distance
+            # 6. Monitor distance and stop recording after the full measurement distance
             recording_stopped = False
             while self.stage_connected and self.stage is not None and self.stage.is_moving:
                 time.sleep(0.02)

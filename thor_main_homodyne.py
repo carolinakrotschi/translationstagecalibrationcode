@@ -2380,7 +2380,11 @@ class HomodyneGui:
                 self.root.after(0, self.toggle_recording)
                 time.sleep(0.5)
 
-            # 3. Move 0.001 mm forward for fringe calibration
+            # 3. Start measurement before collecting the fringe calibration samples
+            self.root.after(0, self.start_measurement)
+            time.sleep(0.5)
+
+            # 4. Move 0.001 mm forward for fringe calibration
             self.ref_cal_samples = []
             self.ref_calibrating = True
             
@@ -2392,7 +2396,7 @@ class HomodyneGui:
             self.ref_calibrating = False
             time.sleep(0.2)
 
-            # 4. Process calibration samples
+            # 5. Process calibration samples
             if self.ref_cal_samples:
                 self.monitor.counter.calibrate_from_samples(self.ref_cal_samples)
                 s1_vals = [s[0] for s in self.ref_cal_samples]
@@ -2404,23 +2408,21 @@ class HomodyneGui:
                     self.monitor.s2_visibility_counter.fringes_visible
                 )
 
-            # 5. Reset fringe count
+            # 6. Reset fringe count
             self.monitor.single_counter.reset()
             self.monitor.s2_visibility_counter.reset()
             self.monitor.counter.reset()
 
-            # 6. Start measurement / recording
-            self.root.after(0, self.start_measurement)
-            time.sleep(0.5)
+            # 7. Start recording
             self.root.after(0, self.toggle_recording)
             time.sleep(0.5)
 
-            # 7. Start 0.5 mm forward movement
+            # 8. Start 0.5 mm forward movement
             start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
             self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
             time.sleep(0.2)
 
-            # 8. Monitor distance and stop recording after the full measurement distance
+            # 9. Monitor distance and stop recording after the full measurement distance
             recording_stopped = False
             while self.stage_connected and self.stage is not None and self.stage.is_moving:
                 time.sleep(0.02)

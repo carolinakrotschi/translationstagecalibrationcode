@@ -923,53 +923,19 @@ class InterferometerApp(ctk.CTk):
                 self.root.after(0, self.toggle_recording)
                 time.sleep(0.5)
 
-            # 3. Move 0.001 mm forward for fringe calibration
-            self.ref_cal_samples = []
-            self.ref_calibrating = True
-            
-            self.root.after(0, lambda: self.start_stage_move_by(0.001))
-            time.sleep(0.2)
-            while self.stage_connected and self.stage is not None and self.stage.is_moving:
-                time.sleep(0.05)
-                
-            self.ref_calibrating = False
-            time.sleep(0.2)
-
-            # 4. Process calibration samples
-            if self.ref_cal_samples:
-                min_val = min(self.ref_cal_samples)
-                max_val = max(self.ref_cal_samples)
-                value_range = max_val - min_val
-                
-                self.dark_threshold = min_val + value_range * 0.125
-                self.bright_threshold = max_val - value_range * 0.40
-                
-                self.after(
-                    0,
-                    lambda:
-                    self.label_thresholds.configure(
-                        text=(
-                            f"Dark: "
-                            f"{self.dark_threshold:.2f} | "
-                            f"Bright: "
-                            f"{self.bright_threshold:.2f}"
-                        )
-                    )
-                )
-
-            # 5. Reset fringe count
+            # 3. Reset fringe count
             self.accumulated_fringes = 0
 
-            # 6. Start measurement / recording
+            # 4. Start measurement / recording
             self.root.after(0, self.toggle_recording)
             time.sleep(0.5)
 
-            # 7. Start 0.5 mm forward movement
+            # 5. Start 0.5 mm forward movement
             start_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
             self.root.after(0, lambda: self.start_stage_move_by(REF_MEASUREMENT_DISTANCE_MM))
             time.sleep(0.2)
 
-            # 8. Monitor distance and stop recording after the full measurement distance
+            # 6. Monitor distance and stop recording after the full measurement distance
             recording_stopped = False
             while self.stage_connected and self.stage is not None and self.stage.is_moving:
                 time.sleep(0.02)
