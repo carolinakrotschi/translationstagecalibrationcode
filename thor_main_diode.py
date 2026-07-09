@@ -704,12 +704,27 @@ class SideApp(ctk.CTk):
             pady=(4, 10)
         )
 
+        self.plot_header_frame = ctk.CTkFrame(self.plot_frame, fg_color="transparent")
+        self.plot_header_frame.pack(fill="x", padx=10, pady=(5, 2))
+
         ctk.CTkLabel(
-            self.plot_frame,
+            self.plot_header_frame,
             text="Live Raw Voltage",
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=(5, 2))
+        ).pack(side="left")
+
+        self.show_cleaned = True
+        self.btn_toggle_clean = ctk.CTkButton(
+            self.plot_header_frame,
+            text="Cleaned Signal: ON",
+            width=150,
+            height=24,
+            font=("Arial", 11),
+            fg_color=TEXT_COLOR,
+            command=self.toggle_cleaned_signal
+        )
+        self.btn_toggle_clean.pack(side="right")
 
         self.build_plot()
 
@@ -1590,6 +1605,19 @@ class SideApp(ctk.CTk):
         self.plot_axis.relim()
         self.plot_axis.autoscale_view()
         self.plot_canvas.draw_idle()
+
+    def toggle_cleaned_signal(self):
+        self.show_cleaned = not self.show_cleaned
+        if self.show_cleaned:
+            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
+            self.plot_line_voltage.set_alpha(0.3)
+            self.plot_line_clean.set_visible(True)
+        else:
+            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
+            self.plot_line_voltage.set_alpha(1.0)
+            self.plot_line_clean.set_visible(False)
+        self.plot_axis.legend(loc="upper right", prop={"size": 8})
+        self.update_plot()
 
     # -----------------------------------------------------------------------------
     # 8.6 SHOW MONITORING ERROR

@@ -1204,12 +1204,27 @@ class HomodyneGui:
         plot_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
         plot_frame.pack(fill="x", expand=False, pady=4)
 
+        plot_header_frame = ctk.CTkFrame(plot_frame, fg_color="transparent")
+        plot_header_frame.pack(fill="x", padx=10, pady=(10, 4))
+
         ctk.CTkLabel(
-            plot_frame,
+            plot_header_frame,
             text="Raw Signal",
             font=("Arial", 15, "bold"),
             text_color=TEXT_COLOR
-        ).pack(pady=(10, 4))
+        ).pack(side="left")
+
+        self.show_cleaned = True
+        self.btn_toggle_clean = ctk.CTkButton(
+            plot_header_frame,
+            text="Cleaned Signal: ON",
+            width=150,
+            height=24,
+            font=("Arial", 11),
+            fg_color=TEXT_COLOR,
+            command=self.toggle_cleaned_signal
+        )
+        self.btn_toggle_clean.pack(side="right")
 
         if plt is None or FigureCanvasTkAgg is None:
             ctk.CTkLabel(
@@ -3850,6 +3865,24 @@ class HomodyneGui:
             s2_hist = list(self.raw_s2_history)
 
         self.update_plot_data(s1_hist, s2_hist)
+
+    def toggle_cleaned_signal(self):
+        self.show_cleaned = not self.show_cleaned
+        if self.show_cleaned:
+            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
+            self.plot_lines['S1_raw'].set_alpha(0.3)
+            self.plot_lines['S2_raw'].set_alpha(0.3)
+            self.plot_lines['S1_raw_clean'].set_visible(True)
+            self.plot_lines['S2_raw_clean'].set_visible(True)
+        else:
+            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
+            self.plot_lines['S1_raw'].set_alpha(1.0)
+            self.plot_lines['S2_raw'].set_alpha(1.0)
+            self.plot_lines['S1_raw_clean'].set_visible(False)
+            self.plot_lines['S2_raw_clean'].set_visible(False)
+        self.plot_axes['S1_raw'].legend(loc="upper right", prop={"size": 8})
+        self.plot_axes['S2_raw'].legend(loc="upper right", prop={"size": 8})
+        self.update_plot()
 
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
