@@ -35,7 +35,7 @@ class CameraHandler:
         self.roi_h = 40
 
         # Camera Settings
-        self.exposure_us = 500 #20 #in mykrometer
+        self.exposure_us = 80 #20 #in mykrometer
         self.gain = 5
         self.black_level = 0
 

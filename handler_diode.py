@@ -17,8 +17,8 @@ from dataclasses import dataclass
 # 2. DIODE SETUP CONSTANTS
 # -----------------------------------------------------------------------------
 
-PHOTODIODE_CHANNEL = "Dev1/ai0"
-PHOTODIODE_REF_CHANNEL = "Dev1/ai1"
+PHOTODIODE_CHANNEL = "Dev1/ai1"
+PHOTODIODE_REF_CHANNEL = "Dev1/ai0"
 
 USE_REFERENCE_DIODE = True
 
