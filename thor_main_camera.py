@@ -1646,6 +1646,7 @@ class InterferometerApp(ctk.CTk):
     def loop(self):
 
         frame_counter = 0
+        any_fringe_counted_in_batch = False
 
         while self.is_monitoring:
 
@@ -1656,13 +1657,8 @@ class InterferometerApp(ctk.CTk):
 
             frame_counter += 1
 
-            if frame_counter % 20 == 0: #refresh live image after 20 frames to keep UI responsive
-
-                self.after(
-                    0,
-                    lambda f=img:
-                    self.update_image(f)
-                )
+            # Image drawing moved to throttled updates at the end of the loop
+            pass
 
             intensity = (
                 self.camera_handler
@@ -1762,11 +1758,8 @@ class InterferometerApp(ctk.CTk):
                                 intensity
                             )
                         )
-                self.after(
-                    0,
-                    lambda v=intensity, c=fringe_counted:
-                    self.update_intensity_label(v, c)
-                )
+                        if fringe_counted:
+                            any_fringe_counted_in_batch = True
             #convert counted fringes into distance in mm
             dist_mm = ( 
                 self.accumulated_fringes
@@ -1788,26 +1781,25 @@ class InterferometerApp(ctk.CTk):
                 2 * dist_mm
             ) / SPEED_OF_LIGHT_MM_PS
 
-            self.after(
-                0,
-                lambda:
-                self.update_values(
-                    dist_mm,
-                    dist_um,
-                    time_ps
-                )
-            )
+            # Throttle UI updates to every 3 frames (~20 FPS)
+            if frame_counter % 3 == 0:
+                # Heavy image processing in background thread
+                display = img.astype(np.float32)
+                display -= np.min(display) 
+                if np.max(display) > 0:
+                    display /= np.max(display)
+                display = (display * 255).astype(np.uint8)
+                pil_image = Image.fromarray(display).convert("RGB")
+                pil_image = pil_image.resize(self.live_size)
 
-            self.after(
-                0,
-                lambda:
-                self.label_accumulated_fringes.configure(
-                    text=(
-                        f"Accumulated Fringes Count: "
-                        f"{self.accumulated_fringes}"
-                    )
+                fringe_to_report = any_fringe_counted_in_batch
+                any_fringe_counted_in_batch = False
+
+                self.after(
+                    0,
+                    lambda p=pil_image, m=dist_mm, u=dist_um, ps=time_ps, v=intensity, c=fringe_to_report, f_count=self.accumulated_fringes:
+                    self.update_ui_frame(p, m, u, ps, v, c, f_count)
                 )
-            )
     # -----------------------------------------------------------------------------
     # 8.2 DETECT AND COUNT FRINGES
     # -----------------------------------------------------------------------------
@@ -1923,25 +1915,15 @@ class InterferometerApp(ctk.CTk):
     # 8.5 SHOW LIVE CAMERA IMAGE
     # -----------------------------------------------------------------------------
     
-    def update_image(self, img):
-
-        display = img.astype(np.float32)
-
-        display -= np.min(display) 
-
-        if np.max(display) > 0: #normalize only when image contains nonzero signal
-            display /= np.max(display)
-
-        display = ( #convert normalized image into brightness value 
-            display * 255
-        ).astype(np.uint8)
-
-        pil = Image.fromarray(display).convert( #convert to rgb image
-            "RGB"
+    def update_ui_frame(self, pil_image, mm, um, ps, intensity, fringe_counted, accumulated_fringes):
+        self.update_image(pil_image)
+        self.update_values(mm, um, ps)
+        self.update_intensity_label(intensity, fringe_counted)
+        self.label_accumulated_fringes.configure(
+            text=f"{accumulated_fringes}"
         )
 
-        pil = pil.resize(self.live_size) #resize camera image to preview area
-
+    def update_image(self, pil):
         ctk_img = ctk.CTkImage( #convert back into customtkinter image
             light_image=pil,
             size=self.live_size

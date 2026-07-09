@@ -1011,14 +1011,18 @@ class SideApp(ctk.CTk):
         self.append_raw_history(
             raw_voltage
         )
-        self.update_plot()
 
-        self.label_raw.configure(
-            text=f"Raw Voltage: {raw_voltage:+.6f} V"
-        )
-        self.label_calibration.configure(
-            text=f"Calibration: {elapsed_s:.1f}/{total_s:.1f}s"
-        )
+        now = time.time()
+        if now - getattr(self, '_last_cal_draw_time', 0.0) >= 0.05:
+            self._last_cal_draw_time = now
+            self.update_plot()
+
+            self.label_raw.configure(
+                text=f"Raw Voltage: {raw_voltage:+.6f} V"
+            )
+            self.label_calibration.configure(
+                text=f"Calibration: {elapsed_s:.1f}/{total_s:.1f}s"
+            )
 
     # -----------------------------------------------------------------------------
     # 7.8.2 FINISH CALIBRATION DISPLAY
@@ -1402,18 +1406,10 @@ class SideApp(ctk.CTk):
         self.append_raw_history(
             sample.raw_voltage
         )
-        self.update_plot()
 
         distance_mm = self.accumulated_fringes * self.fringe_distance_mm
         distance_um = distance_mm * 1000
         time_ps = (2 * distance_mm) / SPEED_OF_LIGHT_MM_PS
-
-        self.label_um.configure(
-            text=f"Distance from Fringes: {distance_um:.6f} um"
-        )
-        self.label_ps.configure(
-            text=f"Time Delay: {time_ps:.4f} ps"
-        )
 
         if self.recording:
             elapsed = time.time() - self.recording_start_time
@@ -1425,15 +1421,27 @@ class SideApp(ctk.CTk):
                 self.accumulated_fringes,
                 distance_mm
             ))
-        self.label_sample_count.configure(
-            text=f"Accumulated Fringes Count: {self.accumulated_fringes}"
-        )
-        self.label_raw.configure(
-            text=f"Raw Voltage: {sample.raw_voltage:+.6f} V"
-        )
-        self.label_norm.configure(
-            text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
-        )
+
+        now = time.time()
+        if now - getattr(self, '_last_sample_draw_time', 0.0) >= 0.05:
+            self._last_sample_draw_time = now
+            self.update_plot()
+
+            self.label_um.configure(
+                text=f"Distance from Fringes: {distance_um:.6f} um"
+            )
+            self.label_ps.configure(
+                text=f"Time Delay: {time_ps:.4f} ps"
+            )
+            self.label_sample_count.configure(
+                text=f"Accumulated Fringes Count: {self.accumulated_fringes}"
+            )
+            self.label_raw.configure(
+                text=f"Raw Voltage: {sample.raw_voltage:+.6f} V"
+            )
+            self.label_norm.configure(
+                text=f"Normalized Voltage: {sample.normalized_voltage:+.4f}"
+            )
 
         if fringe_counted:
             self.label_sample_count.configure(
