@@ -129,6 +129,9 @@ class InterferometerApp(ctk.CTk):
         self.bright_counter = 0
 
         self.intensity_history = []
+        self.recording = False
+        self.recorded_data = []
+        self.recording_start_time = None
 
         #initializes with manual thresholds, but these will be overridden if the automatic calibration works
         self.dark_threshold = MANUAL_DARK_THRESHOLD
@@ -198,6 +201,16 @@ class InterferometerApp(ctk.CTk):
         )
 
         self.restart_btn.pack(pady=1)
+
+        self.btn_record = ctk.CTkButton(
+            self.scroll,
+            text="START RECORDING",
+            command=self.toggle_recording,
+            width=140,
+            height=28,
+            fg_color="#555555"
+        )
+        self.btn_record.pack(pady=1)
         #label to tell the user the current state
         self.status = ctk.CTkLabel(
             self.scroll,
@@ -756,6 +769,13 @@ class InterferometerApp(ctk.CTk):
         else:
 
             self.is_monitoring = False
+            if self.recording:
+                self.recording = False
+                self.btn_record.configure(
+                    text="START RECORDING",
+                    fg_color="#555555"
+                )
+                self.save_recorded_data()
 
             if self.stage_connected: #are stage commands available? (before stopping it)
                 self.stage.stop()
@@ -790,6 +810,7 @@ class InterferometerApp(ctk.CTk):
         self.bright_counter = 0
 
         self.intensity_history = []
+        self.recorded_data = []
 
         self.calibrating = False
         self.calibration_motion_started = False
@@ -804,6 +825,60 @@ class InterferometerApp(ctk.CTk):
         if hasattr(self, "label_compare_driven"): #checks if the label exists, because this method is also called in the init before creating the label, so it would cause an error if we try to update a label that doesnt exist yet
 
             self.update_comparison_labels(0.0)
+
+    def toggle_recording(self):
+        import time
+        from tkinter import messagebox
+        if not self.is_monitoring:
+            messagebox.showwarning("Aufnahme", "Bitte starte zuerst das Monitoring.")
+            return
+
+        if not self.recording:
+            self.recorded_data = []
+            self.recording_start_time = time.time()
+            self.recording = True
+            self.btn_record.configure(
+                text="REC ● STOP",
+                fg_color=RED_COLOR
+            )
+        else:
+            self.recording = False
+            self.btn_record.configure(
+                text="START RECORDING",
+                fg_color="#555555"
+            )
+            self.save_recorded_data()
+
+    def save_recorded_data(self):
+        import datetime
+        import csv
+        from tkinter import filedialog, messagebox
+
+        if not self.recorded_data:
+            messagebox.showinfo("Aufnahme", "Keine Messdaten zum Speichern vorhanden.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Messdaten speichern",
+            initialfile=f"kamera_messung_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, "w", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "Relative_Time_s",
+                        "Intensity",
+                        "Fringe_Count",
+                        "Calculated_Distance_mm"
+                    ])
+                    writer.writerows(self.recorded_data)
+                messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
+            except Exception as e:
+                messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
     # -----------------------------------------------------------------------------
     # 6.1 MOVE STAGE TO AN ABSOLUTE POSITION
     # -----------------------------------------------------------------------------
@@ -1697,6 +1772,15 @@ class InterferometerApp(ctk.CTk):
                 self.accumulated_fringes
                 * self.fringe_distance_mm
             )
+
+            if self.recording:
+                elapsed = time.time() - self.recording_start_time
+                self.recorded_data.append((
+                    elapsed,
+                    intensity,
+                    self.accumulated_fringes,
+                    dist_mm
+                ))
 
             dist_um = dist_mm * 1000
 
