@@ -70,6 +70,7 @@ STAGE_CORRECTION_SIGN = -1
 STAGE_MOVE_TIMEOUT_S = 60.0
 STAGE_CHECK_TIMEOUT_S = 180.0
 STAGE_POLL_INTERVAL_S = 0.05
+PLOT_SAMPLE_WINDOW = 200
 
 # -----------------------------------------------------------------------------
 # 2. IMPORTS
@@ -3791,6 +3792,9 @@ class HomodyneGui:
         if self.plot_axes is None or self.axis_circle is None:
             return
 
+        window_start = max(0, len(s1_hist) - PLOT_SAMPLE_WINDOW)
+        s1_hist = s1_hist[window_start:]
+        s2_hist = s2_hist[window_start:]
         x = list(range(len(s1_hist)))
 
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
@@ -3801,6 +3805,8 @@ class HomodyneGui:
 
         self.plot_axes['S1_raw'].relim()
         self.plot_axes['S1_raw'].autoscale_view()
+        if x:
+            self.plot_axes['S1_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
 
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
         if self.show_cleaned and len(self.clean_s2_history) == len(x):
@@ -3809,6 +3815,8 @@ class HomodyneGui:
             self.plot_lines['S2_raw_clean'].set_data([], [])
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
+        if x:
+            self.plot_axes['S2_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
 
         if not (self.measuring or self.lock_active):
             self.plot_lines['circle_trace'].set_data([], [])
