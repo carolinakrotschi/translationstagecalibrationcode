@@ -2437,7 +2437,8 @@ class HomodyneGui:
 
             # 3. Start measurement before collecting the fringe calibration samples
             self.root.after(0, self.start_measurement)
-            time.sleep(0.5)
+            while self.monitoring and self.calibrating:
+                time.sleep(0.05)
 
             # 4. Move 0.001 mm forward for fringe calibration
             self.ref_cal_samples = []
@@ -2468,7 +2469,7 @@ class HomodyneGui:
             self.monitor.s2_visibility_counter.reset()
             self.monitor.counter.reset()
 
-            # 7. Start recording
+            # 7. Start recording after the calibration phase from start_measurement is complete
             self.root.after(0, self.toggle_recording)
             time.sleep(0.5)
 
