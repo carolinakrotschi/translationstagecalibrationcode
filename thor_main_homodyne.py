@@ -1802,7 +1802,8 @@ class HomodyneGui:
                         "Lissajous_Distance_mm",
                         "Calculated_Distance_mm",
                         "Fringe_Count",
-                        "Stage_Position_mm"
+                        "Stage_Position_mm",
+                        "Direction"
                     ])
                     writer.writerows(self.recorded_data)
                 messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
@@ -3112,7 +3113,8 @@ class HomodyneGui:
                         cur_phase_distance,
                         cur_single_distance,
                         cur_single_fringes,
-                        stage_pos
+                        stage_pos,
+                        s_obj.direction if s_obj else "none"
                     ))
 
                 time.sleep(SAMPLE_INTERVAL_S)
