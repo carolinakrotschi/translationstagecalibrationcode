@@ -499,8 +499,20 @@ class HomodyneQuadratureCounter:
         with self.lock:
             timestamp = time.time()
 
+            # Slowly update the center tracking to follow DC drift
+            if self.center_s1 is None or self.center_s1 == 0.0:
+                self.center_s1 = raw_s1
+                self.center_s2 = raw_s2
+            else:
+                alpha = 0.002  # time constant ~ 500 samples = 2.5 seconds
+                self.center_s1 = alpha * raw_s1 + (1 - alpha) * self.center_s1
+                self.center_s2 = alpha * raw_s2 + (1 - alpha) * self.center_s2
+
+            s1_centered = (raw_s1 - self.center_s1) / (self.scale_s1 if self.scale_s1 > 1e-12 else 1.0)
+            s2_centered = (raw_s2 - self.center_s2) / (self.scale_s2 if self.scale_s2 > 1e-12 else 1.0)
+            radius = math.hypot(s1_centered, s2_centered)
+
             s1, s2 = self.normalize(raw_s1, raw_s2)
-            radius = math.hypot(s1, s2)
 
             if not self.signals_visible_unlocked():
                 return HomodyneSample(
@@ -538,7 +550,7 @@ class HomodyneQuadratureCounter:
                     valid=False
                 )
 
-            phase_rad = self.phase_direction_sign * math.atan2(s2, s1)
+            phase_rad = self.phase_direction_sign * math.atan2(s2_centered, s1_centered)
 
             if self.previous_phase_rad is None:
                 self.previous_phase_rad = phase_rad
@@ -1197,18 +1209,6 @@ class HomodyneGui:
         ).pack(side="left")
 
         self.show_cleaned = False
-        self.show_fit = False
-        self.btn_toggle_fit = ctk.CTkButton(
-            plot_header_frame,
-            text="Fit: OFF",
-            width=100,
-            height=24,
-            font=("Arial", 11),
-            fg_color="#555555",
-            command=self.toggle_fit
-        )
-        self.btn_toggle_fit.pack(side="right", padx=(6, 0))
-
         self.btn_toggle_clean = ctk.CTkButton(
             plot_header_frame,
             text="Cleaned Signal: OFF",
@@ -3584,14 +3584,6 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].legend(loc="upper right", prop={"size": 8})
         self.update_plot()
 
-    def toggle_fit(self):
-        self.show_fit = not self.show_fit
-        if self.show_fit:
-            self.btn_toggle_fit.configure(text="Fit: ON", fg_color=TEXT_COLOR)
-        else:
-            self.btn_toggle_fit.configure(text="Fit: OFF", fg_color="#555555")
-        self.update_plot()
-
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
             return
@@ -3670,10 +3662,18 @@ class HomodyneGui:
 
         is_measuring = getattr(self, 'measuring', False) or getattr(self, 'calibrating', False)
         if not is_measuring and (peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05):
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
+            # Draw flat gray lines at raw signal averages
+            mean_s1 = sum(s1_hist) / len(s1_hist) if s1_hist else 0.0
+            mean_s2 = sum(s2_hist) / len(s2_hist) if s2_hist else 0.0
+            fit_s1 = [mean_s1] * len(s1_hist)
+            fit_s2 = [mean_s2] * len(s2_hist)
+
+            self.plot_lines['S1_raw_fit'].set_color('gray')
+            self.plot_lines['S2_raw_fit'].set_color('gray')
+            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+            self.plot_lines['S1_raw_fit'].set_visible(True)
+            self.plot_lines['S2_raw_fit'].set_visible(True)
 
             # Clear Lissajous circle trace so it doesn't show noise circle
             self.plot_lines['circle_trace'].set_data([], [])
@@ -3733,18 +3733,12 @@ class HomodyneGui:
         fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
         fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
 
-        if self.show_fit:
-            self.plot_lines['S1_raw_fit'].set_color('orange')
-            self.plot_lines['S2_raw_fit'].set_color('magenta')
-            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
-            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
-            self.plot_lines['S1_raw_fit'].set_visible(True)
-            self.plot_lines['S2_raw_fit'].set_visible(True)
-        else:
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
+        self.plot_lines['S1_raw_fit'].set_color('orange')
+        self.plot_lines['S2_raw_fit'].set_color('magenta')
+        self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+        self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+        self.plot_lines['S1_raw_fit'].set_visible(True)
+        self.plot_lines['S2_raw_fit'].set_visible(True)
 
         if display_s1:
             curr_x = display_s1[-1]

@@ -501,8 +501,20 @@ class HomodyneQuadratureCounter:
         with self.lock:
             timestamp = time.time()
 
+            # Slowly update the center tracking to follow DC drift
+            if self.center_s1 is None or self.center_s1 == 0.0:
+                self.center_s1 = raw_s1
+                self.center_s2 = raw_s2
+            else:
+                alpha = 0.002  # time constant ~ 500 samples = 2.5 seconds
+                self.center_s1 = alpha * raw_s1 + (1 - alpha) * self.center_s1
+                self.center_s2 = alpha * raw_s2 + (1 - alpha) * self.center_s2
+
+            s1_centered = (raw_s1 - self.center_s1) / (self.scale_s1 if self.scale_s1 > 1e-12 else 1.0)
+            s2_centered = (raw_s2 - self.center_s2) / (self.scale_s2 if self.scale_s2 > 1e-12 else 1.0)
+            radius = math.hypot(s1_centered, s2_centered)
+
             s1, s2 = self.normalize(raw_s1, raw_s2)
-            radius = math.hypot(s1, s2)
 
             if not self.signals_visible_unlocked():
                 return HomodyneSample(
@@ -540,7 +552,7 @@ class HomodyneQuadratureCounter:
                     valid=False
                 )
 
-            phase_rad = self.phase_direction_sign * math.atan2(s2, s1)
+            phase_rad = self.phase_direction_sign * math.atan2(s2_centered, s1_centered)
 
             if self.previous_phase_rad is None:
                 self.previous_phase_rad = phase_rad
