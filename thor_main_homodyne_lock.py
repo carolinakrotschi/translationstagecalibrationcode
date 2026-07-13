@@ -1207,6 +1207,18 @@ class HomodyneGui:
         ).pack(side="left")
 
         self.show_cleaned = False
+        self.show_fit = False
+        self.btn_toggle_fit = ctk.CTkButton(
+            plot_header_frame,
+            text="Fit: OFF",
+            width=100,
+            height=24,
+            font=("Arial", 11),
+            fg_color="#555555",
+            command=self.toggle_fit
+        )
+        self.btn_toggle_fit.pack(side="right", padx=(6, 0))
+
         self.btn_toggle_clean = ctk.CTkButton(
             plot_header_frame,
             text="Cleaned Signal: OFF",
@@ -3788,6 +3800,23 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].legend(loc="upper right", prop={"size": 8})
         self.update_plot()
 
+    def toggle_fit(self):
+        self.show_fit = not self.show_fit
+        if self.show_fit:
+            self.btn_toggle_fit.configure(text="Fit: ON", fg_color=TEXT_COLOR)
+        else:
+            self.btn_toggle_fit.configure(text="Fit: OFF", fg_color="#555555")
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
+            self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
+
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
             return
@@ -3817,6 +3846,19 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].autoscale_view()
         if x:
             self.plot_axes['S2_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
+
+        if not self.show_fit:
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_quiver.set_visible(False)
+            self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
+            return
 
         if not (self.measuring or self.lock_active):
             self.plot_lines['circle_trace'].set_data([], [])
