@@ -1601,6 +1601,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def apply_wavelength(self):
+        self.append_recording_event("apply wavelength")
         if self.lock_active:
             self.status.configure(
                 text="Status: unlock before changing wavelength",
@@ -1791,6 +1792,7 @@ class HomodyneGui:
         return position_mm
 
     def toggle_monitoring(self):
+        self.append_recording_event("start monitoring")
         if self.monitoring:
             self.stop_monitoring()
         else:
@@ -1801,6 +1803,7 @@ class HomodyneGui:
         from tkinter import messagebox
         
         if self.recording:
+            self.append_recording_event("recording stopped")
             # Stop recording and save
             self.recording = False
             self.btn_record.configure(
@@ -1824,6 +1827,14 @@ class HomodyneGui:
                 text="REC ● STOP",
                 fg_color=RED_COLOR
             )
+
+    def append_recording_event(self, label):
+        if not self.recording:
+            return
+
+        self.recorded_data.append(["------"])
+        self.recorded_data.append([label])
+        self.recorded_data.append(["------"])
 
     def save_recorded_data(self):
         import datetime
@@ -1858,13 +1869,18 @@ class HomodyneGui:
                         "Fringe_Count",
                         "Stage_Position_mm"
                     ])
-                    writer.writerows(self.recorded_data)
+                    for entry in self.recorded_data:
+                        if isinstance(entry, (list, tuple)):
+                            writer.writerow(entry)
+                        else:
+                            writer.writerow([entry])
                 messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
             except Exception as e:
                 messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
 
     def toggle_measurement(self):
         from tkinter import messagebox
+        self.append_recording_event("start measurement")
         if self.lock_active:
             messagebox.showwarning(
                 "Messung",
@@ -2051,6 +2067,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def apply_stage_speed(self, update_status=True):
+        self.append_recording_event("apply stage speed")
         speed_mm_s = self.get_stage_speed()
         if speed_mm_s is None:
             return False
@@ -2345,6 +2362,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def move_to_min(self):
+        self.append_recording_event("move to min")
         if self.stage is not None:
             self.start_stage_move_to(self.stage.min_position)
 
@@ -2353,6 +2371,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def step_negative(self):
+        self.append_recording_event("step negative")
         self.start_stage_move_by(-self.get_step_size())
 
     # -----------------------------------------------------------------------------
@@ -2360,6 +2379,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def move_to_center(self):
+        self.append_recording_event("move to center")
         self.start_stage_move_to_stepped(0.0)
 
     # -----------------------------------------------------------------------------
@@ -2367,6 +2387,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def step_positive(self):
+        self.append_recording_event("step positive")
         self.start_stage_move_by(self.get_step_size())
 
     # -----------------------------------------------------------------------------
@@ -2374,6 +2395,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def move_to_max(self):
+        self.append_recording_event("move to max")
         if self.stage is not None:
             self.start_stage_move_to(self.stage.max_position)
 
@@ -2382,6 +2404,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def move_to_target(self):
+        self.append_recording_event("move to target")
         try:
             target_mm = self.parse_entry_float(self.target_entry)
             if target_mm < 0:
@@ -2399,6 +2422,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def move_distance(self):
+        self.append_recording_event("move distance")
         try:
             distance_mm = self.parse_entry_float(self.target_entry)
         except ValueError:
@@ -2414,6 +2438,7 @@ class HomodyneGui:
     # -----------------------------------------------------------------------------
 
     def stop_stage(self):
+        self.append_recording_event("stop stage")
         if self.stage_connected and self.stage is not None:
             self.stage.stop()
         self.root.after(
@@ -2618,10 +2643,9 @@ class HomodyneGui:
 
         driven_distance_mm = abs(driven_mm)
         calculated_mm = 0.0
-        if self.monitor is not None and self.monitor.counter is not None:
-            dist = self.monitor.counter.signed_distance_mm()
-            if dist is not None:
-                calculated_mm = abs(dist)
+        if self.monitor is not None and self.monitor.single_counter is not None:
+            fringe_count = self.monitor.single_counter.accumulated_fringes
+            calculated_mm = abs(fringe_count * self.fringe_distance_mm)
 
         difference_mm = driven_distance_mm - calculated_mm
         self.label_compare_driven.configure(
@@ -3018,13 +3042,15 @@ class HomodyneGui:
                 text_color=dir_color
             )
 
-            if distance_mm is None:
+            display_distance_mm = single_distance
+
+            if display_distance_mm is None:
                 self.label_distance.configure(
-                    text="distance_mm = fringe_position * fringe_distance_mm = n/a"
+                    text="distance_mm = S1 Calculated Distance = n/a"
                 )
             else:
                 self.label_distance.configure(
-                    text=f"distance_mm = fringe_position * fringe_distance_mm = {distance_mm:+.9f} mm"
+                    text=f"distance_mm = S1 Calculated Distance = {display_distance_mm:+.9f} mm"
                 )
 
             if sample.fringe_delta != 0:
@@ -3186,7 +3212,7 @@ class HomodyneGui:
                     s_obj = sample if ('sample' in locals() and sample is not None) else None
                     cur_single_fringes = self.monitor.single_counter.accumulated_fringes if self.monitor else 0
                     cur_single_distance = cur_single_fringes * self.fringe_distance_mm
-                    cur_phase_distance = distance_mm if ('distance_mm' in locals() and distance_mm is not None) else 0.0
+                    cur_phase_distance = cur_single_distance
                     self.recorded_data.append((
                         elapsed,
                         raw_s1,
@@ -3271,6 +3297,7 @@ class HomodyneGui:
         )
 
     def toggle_lock(self):
+        self.append_recording_event("toggle lock")
         #get all errors
         if self.lock_active:
             #refuse manual step movement because lock is active
@@ -3387,6 +3414,7 @@ class HomodyneGui:
 
     #return everything to unlock state
     def disable_lock(self, update_status=True):
+        self.append_recording_event("disable lock")
         self.stop_stage_correction()
         self.lock_active = False # disable position lock
         self.btn_lock.configure(
@@ -3715,6 +3743,7 @@ class HomodyneGui:
             )
 
     def reset_monitor(self):
+        self.append_recording_event("reset monitor")
         self.monitor.counter.reset()
         self.monitor.single_counter.reset()
         self.monitor.s2_visibility_counter.reset()
@@ -3783,6 +3812,7 @@ class HomodyneGui:
         self.update_plot_data(s1_hist, s2_hist)
 
     def toggle_cleaned_signal(self):
+        self.append_recording_event("cleaned signal toggle")
         self.show_cleaned = not self.show_cleaned
         if self.show_cleaned:
             self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
@@ -3801,21 +3831,13 @@ class HomodyneGui:
         self.update_plot()
 
     def toggle_fit(self):
+        self.append_recording_event("fit toggle")
         self.show_fit = not self.show_fit
         if self.show_fit:
             self.btn_toggle_fit.configure(text="Fit: ON", fg_color=TEXT_COLOR)
         else:
             self.btn_toggle_fit.configure(text="Fit: OFF", fg_color="#555555")
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
-            self.plot_lines['circle_trace'].set_data([], [])
-            self.plot_lines['circle_current'].set_data([], [])
-            self.plot_lines['circle_pointer'].set_data([], [])
-            self.plot_quiver.set_visible(False)
-            self.plot_canvas.draw_idle()
-            self.plot_canvas_circle.draw_idle()
+        self.update_plot()
 
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
@@ -3846,32 +3868,6 @@ class HomodyneGui:
         self.plot_axes['S2_raw'].autoscale_view()
         if x:
             self.plot_axes['S2_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
-
-        if not self.show_fit:
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
-            self.plot_lines['circle_trace'].set_data([], [])
-            self.plot_lines['circle_current'].set_data([], [])
-            self.plot_lines['circle_pointer'].set_data([], [])
-            self.plot_quiver.set_visible(False)
-            self.plot_canvas.draw_idle()
-            self.plot_canvas_circle.draw_idle()
-            return
-
-        if not (self.measuring or self.lock_active):
-            self.plot_lines['circle_trace'].set_data([], [])
-            self.plot_lines['circle_current'].set_data([], [])
-            self.plot_lines['circle_pointer'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
-            self.plot_quiver.set_visible(False)
-            self.plot_canvas.draw_idle()
-            self.plot_canvas_circle.draw_idle()
-            return
 
         s1_norm_history = []
         s2_norm_history = []
@@ -3908,20 +3904,12 @@ class HomodyneGui:
 
         is_measuring = getattr(self, 'measuring', False) or getattr(self, 'calibrating', False)
         if not is_measuring and (peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05):
-            # Draw flat gray lines at raw signal averages
-            mean_s1 = sum(s1_hist) / len(s1_hist) if s1_hist else 0.0
-            mean_s2 = sum(s2_hist) / len(s2_hist) if s2_hist else 0.0
-            fit_s1 = [mean_s1] * len(s1_hist)
-            fit_s2 = [mean_s2] * len(s2_hist)
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
 
-            self.plot_lines['S1_raw_fit'].set_color('gray')
-            self.plot_lines['S2_raw_fit'].set_color('gray')
-            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
-            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
-            self.plot_lines['S1_raw_fit'].set_visible(True)
-            self.plot_lines['S2_raw_fit'].set_visible(True)
-
-            # Clear Lissajous circle trace so it doesn't show noise circle
+            # Clear Lissajous circle trace so it doesn't show a noise circle
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3979,12 +3967,18 @@ class HomodyneGui:
         fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
         fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
 
-        self.plot_lines['S1_raw_fit'].set_color('orange')
-        self.plot_lines['S2_raw_fit'].set_color('magenta')
-        self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
-        self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
-        self.plot_lines['S1_raw_fit'].set_visible(True)
-        self.plot_lines['S2_raw_fit'].set_visible(True)
+        if self.show_fit:
+            self.plot_lines['S1_raw_fit'].set_color('orange')
+            self.plot_lines['S2_raw_fit'].set_color('magenta')
+            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+            self.plot_lines['S1_raw_fit'].set_visible(True)
+            self.plot_lines['S2_raw_fit'].set_visible(True)
+        else:
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
 
         if display_s1:
             curr_x = display_s1[-1]
