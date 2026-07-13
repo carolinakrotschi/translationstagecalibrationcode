@@ -1490,6 +1490,10 @@ class SideApp(ctk.CTk):
         current_total_stage_movement = movement_base + abs(
             moved
         )
+        self.total_stage_movement = max(
+            self.total_stage_movement,
+            current_total_stage_movement
+        )
         self.current_stage_movement_for_compare = (
             current_total_stage_movement
         )

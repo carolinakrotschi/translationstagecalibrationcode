@@ -154,6 +154,8 @@ class SideApp(ctk.CTk):
         self.recording = False
         self.recorded_data = []
         self.recording_start_time = None
+        self.recording_sample_stride = 5
+        self.recording_sample_counter = 0
         self.accumulated_fringes = 0
         #a bright state only counts after darkness
         self.was_dark = False
@@ -714,16 +716,6 @@ class SideApp(ctk.CTk):
         ).pack(side="left")
 
         self.show_cleaned = False
-        self.btn_toggle_clean = ctk.CTkButton(
-            self.plot_header_frame,
-            text="Cleaned Signal: OFF",
-            width=150,
-            height=24,
-            font=("Arial", 11),
-            fg_color="#555555",
-            command=self.toggle_cleaned_signal
-        )
-        self.btn_toggle_clean.pack(side="right")
 
         self.build_plot()
 
@@ -1412,17 +1404,21 @@ class SideApp(ctk.CTk):
         time_ps = (2 * distance_mm) / SPEED_OF_LIGHT_MM_PS
 
         if self.recording:
-            elapsed = time.time() - self.recording_start_time
-            clean_val = sample.raw_voltage - self.baseline_voltage
-            stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-            self.recorded_data.append((
-                elapsed,
-                sample.raw_voltage,
-                clean_val,
-                self.accumulated_fringes,
-                distance_mm,
-                stage_pos
-            ))
+            self.recording_sample_counter += 1
+            if self.recording_sample_counter % self.recording_sample_stride != 0:
+                pass
+            else:
+                elapsed = time.time() - self.recording_start_time
+                clean_val = sample.raw_voltage - self.baseline_voltage
+                stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
+                self.recorded_data.append((
+                    elapsed,
+                    sample.raw_voltage,
+                    clean_val,
+                    self.accumulated_fringes,
+                    distance_mm,
+                    stage_pos
+                ))
 
         now = time.time()
         if now - getattr(self, '_last_sample_draw_time', 0.0) >= 0.05:
@@ -1607,31 +1603,13 @@ class SideApp(ctk.CTk):
             x,
             self.raw_voltage_history
         )
-        if self.show_cleaned and len(self.clean_voltage_history) == len(x):
-            self.plot_line_clean.set_data(
-                x,
-                self.clean_voltage_history
-            )
-        else:
-            self.plot_line_clean.set_data([], [])
+        self.plot_line_clean.set_data([], [])
+        self.plot_line_clean.set_visible(False)
 
         self.plot_axis.relim()
         self.plot_axis.autoscale_view()
 
         self.plot_canvas.draw_idle()
-
-    def toggle_cleaned_signal(self):
-        self.show_cleaned = not self.show_cleaned
-        if self.show_cleaned:
-            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
-            self.plot_line_voltage.set_alpha(0.3)
-            self.plot_line_clean.set_visible(True)
-        else:
-            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
-            self.plot_line_voltage.set_alpha(1.0)
-            self.plot_line_clean.set_visible(False)
-        self.plot_axis.legend(loc="upper right", prop={"size": 8})
-        self.update_plot()
 
     # -----------------------------------------------------------------------------
     # 8.6 SHOW MONITORING ERROR
@@ -1724,6 +1702,7 @@ class SideApp(ctk.CTk):
         if not self.recording:
             self.recorded_data = []
             self.recording_start_time = time.time()
+            self.recording_sample_counter = -1
             self.recording = True
             self.btn_record.configure(
                 text="REC ● STOP",
@@ -2425,6 +2404,9 @@ class SideApp(ctk.CTk):
                 self.update_still_to_drive_label(pos)
 
                 if self.stage.is_moving:
+                    moved = abs(pos - getattr(self, "stage_start_position", pos))
+                    movement_base = getattr(self, "stage_movement_before_move", self.total_stage_movement)
+                    self.update_stage_labels(pos, moved, movement_base)
                     self.update_stage_speed_label(pos)
                 elif (
                     self.stage_remaining_known

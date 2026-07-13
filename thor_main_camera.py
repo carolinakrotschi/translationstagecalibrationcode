@@ -133,6 +133,8 @@ class InterferometerApp(ctk.CTk):
         self.recording = False
         self.recorded_data = []
         self.recording_start_time = None
+        self.recording_sample_stride = 5
+        self.recording_sample_counter = 0
 
         #initializes with manual thresholds, but these will be overridden if the automatic calibration works
         self.dark_threshold = MANUAL_DARK_THRESHOLD
@@ -842,6 +844,7 @@ class InterferometerApp(ctk.CTk):
         if not self.recording:
             self.recorded_data = []
             self.recording_start_time = time.time()
+            self.recording_sample_counter = -1
             self.recording = True
             self.btn_record.configure(
                 text="REC ● STOP",
@@ -1789,15 +1792,17 @@ class InterferometerApp(ctk.CTk):
             )
 
             if self.recording:
-                elapsed = time.time() - self.recording_start_time
-                stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
-                self.recorded_data.append((
-                    elapsed,
-                    intensity,
-                    self.accumulated_fringes,
-                    dist_mm,
-                    stage_pos
-                ))
+                self.recording_sample_counter += 1
+                if self.recording_sample_counter % self.recording_sample_stride == 0:
+                    elapsed = time.time() - self.recording_start_time
+                    stage_pos = self.stage.get_position() if (self.stage_connected and self.stage is not None) else 0.0
+                    self.recorded_data.append((
+                        elapsed,
+                        intensity,
+                        self.accumulated_fringes,
+                        dist_mm,
+                        stage_pos
+                    ))
 
             dist_um = dist_mm * 1000
 

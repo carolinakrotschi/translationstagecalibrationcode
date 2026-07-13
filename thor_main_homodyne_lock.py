@@ -820,6 +820,8 @@ class HomodyneGui:
         self.recording = False
         self.recorded_data = []
         self.recording_start_time = None
+        self.recording_sample_stride = 5
+        self.recording_sample_counter = 0
         
         # Measurement state variables
         self.measuring = False
@@ -1141,7 +1143,7 @@ class HomodyneGui:
             fg_color=RED_COLOR,
             font=("Arial", 11, "bold")
         )
-        self.btn_stop.grid(row=0, column=3, padx=1, sticky="ew")
+        self.btn_stop.grid(row=0, column=2, padx=1, sticky="ew")
 
         self.label_stage_position = ctk.CTkLabel(
             self.stage_frame,
@@ -1208,27 +1210,6 @@ class HomodyneGui:
 
         self.show_cleaned = False
         self.show_fit = False
-        self.btn_toggle_fit = ctk.CTkButton(
-            plot_header_frame,
-            text="Fit: OFF",
-            width=100,
-            height=24,
-            font=("Arial", 11),
-            fg_color="#555555",
-            command=self.toggle_fit
-        )
-        self.btn_toggle_fit.pack(side="right", padx=(6, 0))
-
-        self.btn_toggle_clean = ctk.CTkButton(
-            plot_header_frame,
-            text="Cleaned Signal: OFF",
-            width=150,
-            height=24,
-            font=("Arial", 11),
-            fg_color="#555555",
-            command=self.toggle_cleaned_signal
-        )
-        self.btn_toggle_clean.pack(side="right")
 
         if plt is None or FigureCanvasTkAgg is None:
             ctk.CTkLabel(
@@ -1822,6 +1803,7 @@ class HomodyneGui:
             
             self.recorded_data = []
             self.recording_start_time = time.time()
+            self.recording_sample_counter = -1
             self.recording = True
             self.btn_record.configure(
                 text="REC ● STOP",
@@ -2480,6 +2462,9 @@ class HomodyneGui:
                 self.update_still_to_drive_label(pos)
 
                 if self.stage.is_moving:
+                    moved = abs(pos - getattr(self, "stage_start_position", pos))
+                    movement_base = getattr(self, "stage_movement_before_move", self.total_stage_movement)
+                    self.update_stage_labels(pos, moved, movement_base)
                     self.update_stage_speed_label(pos)
                 elif self.stage_remaining_known and self.stage_remaining_to_drive <= 0:
                     self.label_stage_speed.configure(
@@ -3206,6 +3191,10 @@ class HomodyneGui:
                             self.latest_distance_mm = distance_mm
 
                 if self.recording:
+                    self.recording_sample_counter += 1
+                    if self.recording_sample_counter % self.recording_sample_stride != 0:
+                        time.sleep(SAMPLE_INTERVAL_S)
+                        continue
                     elapsed = time.time() - self.recording_start_time
                     # Non-blocking read of the last queried stage position
                     stage_pos = self.stage.current_position if (self.stage_connected and self.stage is not None) else 0.0
@@ -3793,10 +3782,6 @@ class HomodyneGui:
             self.plot_lines['S2_raw'].set_data([], [])
             self.plot_lines['S1_raw_clean'].set_data([], [])
             self.plot_lines['S2_raw_clean'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3811,34 +3796,6 @@ class HomodyneGui:
 
         self.update_plot_data(s1_hist, s2_hist)
 
-    def toggle_cleaned_signal(self):
-        self.append_recording_event("cleaned signal toggle")
-        self.show_cleaned = not self.show_cleaned
-        if self.show_cleaned:
-            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
-            self.plot_lines['S1_raw'].set_alpha(0.3)
-            self.plot_lines['S2_raw'].set_alpha(0.3)
-            self.plot_lines['S1_raw_clean'].set_visible(True)
-            self.plot_lines['S2_raw_clean'].set_visible(True)
-        else:
-            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
-            self.plot_lines['S1_raw'].set_alpha(1.0)
-            self.plot_lines['S2_raw'].set_alpha(1.0)
-            self.plot_lines['S1_raw_clean'].set_visible(False)
-            self.plot_lines['S2_raw_clean'].set_visible(False)
-        self.plot_axes['S1_raw'].legend(loc="upper right", prop={"size": 8})
-        self.plot_axes['S2_raw'].legend(loc="upper right", prop={"size": 8})
-        self.update_plot()
-
-    def toggle_fit(self):
-        self.append_recording_event("fit toggle")
-        self.show_fit = not self.show_fit
-        if self.show_fit:
-            self.btn_toggle_fit.configure(text="Fit: ON", fg_color=TEXT_COLOR)
-        else:
-            self.btn_toggle_fit.configure(text="Fit: OFF", fg_color="#555555")
-        self.update_plot()
-
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
             return
@@ -3849,10 +3806,8 @@ class HomodyneGui:
         x = list(range(len(s1_hist)))
 
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
-        if self.show_cleaned and len(self.clean_s1_history) == len(x):
-            self.plot_lines['S1_raw_clean'].set_data(x, self.clean_s1_history)
-        else:
-            self.plot_lines['S1_raw_clean'].set_data([], [])
+        self.plot_lines['S1_raw_clean'].set_data([], [])
+        self.plot_lines['S1_raw_clean'].set_visible(False)
 
         self.plot_axes['S1_raw'].relim()
         self.plot_axes['S1_raw'].autoscale_view()
@@ -3860,10 +3815,8 @@ class HomodyneGui:
             self.plot_axes['S1_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
 
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
-        if self.show_cleaned and len(self.clean_s2_history) == len(x):
-            self.plot_lines['S2_raw_clean'].set_data(x, self.clean_s2_history)
-        else:
-            self.plot_lines['S2_raw_clean'].set_data([], [])
+        self.plot_lines['S2_raw_clean'].set_data([], [])
+        self.plot_lines['S2_raw_clean'].set_visible(False)
         self.plot_axes['S2_raw'].relim()
         self.plot_axes['S2_raw'].autoscale_view()
         if x:
@@ -3904,11 +3857,6 @@ class HomodyneGui:
 
         is_measuring = getattr(self, 'measuring', False) or getattr(self, 'calibrating', False)
         if not is_measuring and (peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05):
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
-
             # Clear Lissajous circle trace so it doesn't show a noise circle
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
@@ -3962,23 +3910,6 @@ class HomodyneGui:
         display_s2 = smoothed_s2
 
         self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
-
-        # Scale fit back to raw voltage levels for raw S1 and S2 plots
-        fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
-        fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
-
-        if self.show_fit:
-            self.plot_lines['S1_raw_fit'].set_color('orange')
-            self.plot_lines['S2_raw_fit'].set_color('magenta')
-            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
-            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
-            self.plot_lines['S1_raw_fit'].set_visible(True)
-            self.plot_lines['S2_raw_fit'].set_visible(True)
-        else:
-            self.plot_lines['S1_raw_fit'].set_data([], [])
-            self.plot_lines['S2_raw_fit'].set_data([], [])
-            self.plot_lines['S1_raw_fit'].set_visible(False)
-            self.plot_lines['S2_raw_fit'].set_visible(False)
 
         if display_s1:
             curr_x = display_s1[-1]

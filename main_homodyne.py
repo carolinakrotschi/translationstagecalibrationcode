@@ -2231,6 +2231,9 @@ class HomodyneGui:
                 self.update_still_to_drive_label(pos)
 
                 if self.stage.is_moving:
+                    moved = abs(pos - getattr(self, "stage_start_position", pos))
+                    movement_base = getattr(self, "stage_movement_before_move", self.total_stage_movement)
+                    self.update_stage_labels(pos, moved, movement_base)
                     self.update_stage_speed_label(pos)
                 elif self.stage_remaining_known and self.stage_remaining_to_drive <= 0:
                     self.label_stage_speed.configure(
@@ -2250,6 +2253,10 @@ class HomodyneGui:
         if movement_base is None:
             movement_base = self.total_stage_movement
         current_total_stage_movement = movement_base + abs(moved)
+        self.total_stage_movement = max(
+            self.total_stage_movement,
+            current_total_stage_movement
+        )
         self.current_stage_movement_for_compare = current_total_stage_movement
 
         self.set_stage_position_label_text(f"Stage Position: {pos:.6f} mm")
