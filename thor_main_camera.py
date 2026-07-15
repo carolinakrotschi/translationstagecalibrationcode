@@ -56,6 +56,13 @@ FRINGE_DISTANCE_MM = (
     #second division by 2 is because in a Michelson interferometer, the stage movement causes a change in path length that is twice the stage movement, so the fringe distance corresponds to half the wavelength of the laser light
 )
 
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+    velocity_mm_s = abs(float(velocity_mm_s))
+    if velocity_mm_s <= 1e-12:
+        return float("inf")
+    fringe_period_s = FRINGE_DISTANCE_MM / velocity_mm_s
+    return fringe_period_s / 8.0
+
 SPEED_OF_LIGHT_MM_PS = 0.299792458
 DEFAULT_STAGE_SPEED_MM_S = 0.000600
 # -----------------------------------------------------------------------------
@@ -70,8 +77,6 @@ ORANGE_COLOR = "#D35400"
 #the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
-#after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
-FRINGE_COOLDOWN = 0.08
 #after calibration, 2s cooldown so that no buttons can be pressed immediately
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 MODE = "continuous"
@@ -1869,9 +1874,14 @@ class InterferometerApp(ctk.CTk):
 
             self.bright_counter = 0
 
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
         cooldown_ok = ( #choose whether enough time has passed since last counted fringe
             time.time() - self.last_count_time
-        ) > FRINGE_COOLDOWN
+        ) > compute_fringe_cooldown_s(stage_velocity)
 
         if (
             self.was_dark

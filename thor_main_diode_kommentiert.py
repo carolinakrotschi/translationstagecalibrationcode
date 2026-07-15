@@ -160,8 +160,6 @@ from handler_diode import (
 from thor_handler_stage import StageController
 # Leerzeile zur besseren Lesbarkeit.
 
-# In Python berechnet `=` hier die Konstante `FRINGE_COOLDOWN` aus anderen Größen.
-FRINGE_COOLDOWN = max(0.1, MAX_FRINGE_WIDTH_FRAMES * SAMPLE_INTERVAL_S)
 # Leerzeile zur besseren Lesbarkeit.
 
 # Originalkommentar oder Abschnittsüberschrift.
@@ -182,6 +180,19 @@ def compute_quarter_wavelength_step_mm(wavelength_nm):
 
 # `return` gibt in Python einen Wert zurück oder beendet die Funktion.
     return (wavelength_nm / 4) / 1_000_000
+
+# `def` definiert in Python eine Funktion oder Methode. Hier: Berechnet den dynamischen Cooldown bis zum nächsten Fringe.
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+# In Python speichert `=` hier den Betrag der aktuellen Geschwindigkeit.
+    velocity_mm_s = abs(float(velocity_mm_s))
+# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
+    if velocity_mm_s <= 1e-12:
+# `return` gibt in Python einen Wert zurück oder beendet die Funktion.
+        return float("inf")
+# In Python speichert `=` hier die erwartete Fringe-Periode in Sekunden.
+    fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
+# Der Cooldown ist ein Achtel dieser Fringe-Periode.
+    return fringe_period_s / 8.0
 # Leerzeile zur besseren Lesbarkeit.
 
 # Originalkommentar oder Abschnittsüberschrift.
@@ -1430,26 +1441,6 @@ class SideApp(ctk.CTk):
 
 # In Python speichert `=` hier den booleschen Startwert aus in `show_cleaned`.
         self.show_cleaned = False
-# In Python erzeugt `()` einen Button.
-        self.btn_toggle_clean = ctk.CTkButton(
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_header_frame,
-# Umschalter für geglättete Daten.
-            text="Cleaned Signal: OFF",
-# In Python speichert `=` hier einen Wert in `width`.
-            width=150,
-# In Python speichert `=` hier einen Wert in `height`.
-            height=24,
-# In Python speichert `=` hier einen Wert in `font`.
-            font=("Arial", 11),
-# In Python speichert `=` hier einen Wert in `fg_color`.
-            fg_color="#555555",
-# Hier wird der Button in Python mit der Methode für Start/Stopp verbunden.
-            command=self.toggle_cleaned_signal
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        )
-# In Python wird mit `.` ein UI-Element im Layout platziert.
-        self.btn_toggle_clean.pack(side="right")
 # Leerzeile zur besseren Lesbarkeit.
 
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
@@ -2972,12 +2963,18 @@ class SideApp(ctk.CTk):
             self.fringe_peak_voltage = smooth_voltage
 # Leerzeile zur besseren Lesbarkeit.
 
+# In Python speichert `=` hier einen Wert in `stage_velocity`.
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
 # In Python speichert `=` hier einen Wert in `cooldown_ok`.
         cooldown_ok = (
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
             time.time() - self.last_count_time
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        ) > FRINGE_COOLDOWN
+        ) > compute_fringe_cooldown_s(stage_velocity)
 # Leerzeile zur besseren Lesbarkeit.
 
 # `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
@@ -3216,20 +3213,10 @@ class SideApp(ctk.CTk):
             self.raw_voltage_history
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
         )
-# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
-        if self.show_cleaned and len(self.clean_voltage_history) == len(x):
 # In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_line_clean.set_data(
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-                x,
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-                self.clean_voltage_history
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            )
-# `else` läuft in Python, wenn keine der vorherigen Bedingungen zutrifft.
-        else:
-# In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_line_clean.set_data([], [])
+        self.plot_line_clean.set_data([], [])
+# In Python wird mit `.` ein Plot-Element unsichtbar gemacht.
+        self.plot_line_clean.set_visible(False)
 # Leerzeile zur besseren Lesbarkeit.
 
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
@@ -3240,32 +3227,6 @@ class SideApp(ctk.CTk):
 
 # In Python fordert `draw_idle()` ein spätes Neuzeichnen des Plots an.
         self.plot_canvas.draw_idle()
-# Leerzeile zur besseren Lesbarkeit.
-
-# `def` definiert in Python eine Funktion oder Methode. Hier: Schaltet die geglättete Anzeige um.
-    def toggle_cleaned_signal(self):
-# In Python speichert `=` einen Wert in `show_cleaned`.
-        self.show_cleaned = not self.show_cleaned
-# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
-        if self.show_cleaned:
-# In Python ruft `.` die Methode `configure` auf, um den Text eines UI-Elements zu ändern.
-            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_line_voltage.set_alpha(0.3)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_line_clean.set_visible(True)
-# `else` läuft in Python, wenn keine der vorherigen Bedingungen zutrifft.
-        else:
-# Umschalter für geglättete Daten.
-            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_line_voltage.set_alpha(1.0)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_line_clean.set_visible(False)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        self.plot_axis.legend(loc="upper right", prop={"size": 8})
-# In Python ruft `.` eine eigene Methode auf.
-        self.update_plot()
 # Leerzeile zur besseren Lesbarkeit.
 
 # Originalkommentar oder Abschnittsüberschrift.

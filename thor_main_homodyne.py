@@ -117,6 +117,13 @@ DEFAULT_STAGE_SPEED_MM_S = 0.000600
 def compute_fringe_distance_mm(wavelength_nm):
     return (wavelength_nm / 2) / 1_000_000
 
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+    velocity_mm_s = abs(float(velocity_mm_s))
+    if velocity_mm_s <= 1e-12:
+        return float("inf")
+    fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
+    return fringe_period_s / 8.0
+
 def wrap_to_pi(angle_rad):
     return (angle_rad + math.pi) % (2 * math.pi) - math.pi
 
@@ -342,7 +349,14 @@ class SingleSignalFringeCounter:
         if self.fringe_peak_voltage is None:
             self.fringe_peak_voltage = smooth_voltage
 
-        cooldown_ok = (time.time() - self.last_count_time) > FRINGE_COOLDOWN
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
+        cooldown_ok = (
+            time.time() - self.last_count_time
+        ) > compute_fringe_cooldown_s(stage_velocity)
 
         if not self.was_dark:
             if smooth_voltage > self.fringe_peak_voltage:

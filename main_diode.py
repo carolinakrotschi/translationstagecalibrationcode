@@ -21,8 +21,6 @@ STEP_PAUSE_S = 0.05 #pause between steps in stepped mode
 #the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
-#after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
-FRINGE_COOLDOWN = 0.08
 MODE = "continuous" #"continuous" or "stepped" - determines how the stage moves
 VELOCITY_MM_S = 0.0006 #speed for continuous mode
 TOTAL_DISTANCE_MM = 13.0 #total distance to move in continuous mode
@@ -61,6 +59,13 @@ SPEED_OF_LIGHT_MM_PS = 0.299792458
 DEFAULT_STAGE_SPEED_MM_S = 0.0006
 def compute_quarter_wavelength_step_mm(wavelength_nm):
     return (wavelength_nm / 4) / 1_000_000
+
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+    velocity_mm_s = abs(float(velocity_mm_s))
+    if velocity_mm_s <= 1e-12:
+        return float("inf")
+    fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
+    return fringe_period_s / 8.0
 
 # -----------------------------------------------------------------------------
 # 3.1 COLORS AND FILTER TIMINGS
@@ -859,9 +864,14 @@ class SideApp(ctk.CTk):
             self.bright_counter += 1
         else:
             self.bright_counter = 0
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
         cooldown_ok = (
             time.time() - self.last_count_time
-        ) > FRINGE_COOLDOWN
+        ) > compute_fringe_cooldown_s(stage_velocity)
         if (
             self.was_dark
             and self.bright_counter >= REQUIRED_BRIGHT_FRAMES

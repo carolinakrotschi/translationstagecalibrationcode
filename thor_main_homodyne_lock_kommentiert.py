@@ -104,8 +104,6 @@ REQUIRED_DARK_FRAMES = 2
 REQUIRED_BRIGHT_FRAMES = 2
 # In Python speichert `=` hier den festen Wert `15` in der Konstante `MAX_FRINGE_WIDTH_FRAMES`. So breit darf ein Fringe-Zeitfenster maximal sein.
 MAX_FRINGE_WIDTH_FRAMES = 15
-# In Python berechnet `=` hier die Konstante `FRINGE_COOLDOWN` aus anderen Größen.
-FRINGE_COOLDOWN = max(0.04, MAX_FRINGE_WIDTH_FRAMES * SAMPLE_INTERVAL_S)
 # Leerzeile zur besseren Lesbarkeit.
 
 # In Python speichert `=` hier einen Wert in der Konstante `MODE`. Damit wird der Bewegungsmodus gewählt.
@@ -239,6 +237,19 @@ def compute_fringe_distance_mm(wavelength_nm):
 # `return` gibt in Python einen Wert zurück oder beendet die Funktion.
     return (wavelength_nm / 2) / 1_000_000
 # Leerzeile zur besseren Lesbarkeit.
+
+# `def` definiert in Python eine Funktion oder Methode. Hier: Berechnet den dynamischen Cooldown bis zum nächsten Fringe.
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+# In Python speichert `=` hier den Betrag der aktuellen Geschwindigkeit.
+    velocity_mm_s = abs(float(velocity_mm_s))
+# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
+    if velocity_mm_s <= 1e-12:
+# `return` gibt in Python einen Wert zurück oder beendet die Funktion.
+        return float("inf")
+# In Python speichert `=` hier die erwartete Fringe-Periode in Sekunden.
+    fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
+# Der Cooldown ist ein Achtel dieser Fringe-Periode.
+    return fringe_period_s / 8.0
 
 # `def` definiert in Python eine Funktion oder Methode. Hier: wrap_to_pi
 def wrap_to_pi(angle_rad):
@@ -690,8 +701,16 @@ class SingleSignalFringeCounter:
             self.fringe_peak_voltage = smooth_voltage
 # Leerzeile zur besseren Lesbarkeit.
 
+# In Python speichert `=` hier einen berechneten Wert in `stage_velocity`.
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
 # In Python speichert `=` hier einen berechneten Wert in `cooldown_ok`.
-        cooldown_ok = (time.time() - self.last_count_time) > FRINGE_COOLDOWN
+        cooldown_ok = (
+            time.time() - self.last_count_time
+        ) > compute_fringe_cooldown_s(stage_velocity)
 # Leerzeile zur besseren Lesbarkeit.
 
 # `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
@@ -2416,26 +2435,6 @@ class HomodyneGui:
 
 # In Python speichert `=` hier den booleschen Startwert aus in `show_cleaned`.
         self.show_cleaned = False
-# In Python erzeugt `()` einen Button.
-        self.btn_toggle_clean = ctk.CTkButton(
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            plot_header_frame,
-# Umschalter für geglättete Daten.
-            text="Cleaned Signal: OFF",
-# In Python speichert `=` hier einen Wert in `width`.
-            width=150,
-# In Python speichert `=` hier einen Wert in `height`.
-            height=24,
-# In Python speichert `=` hier einen Wert in `font`.
-            font=("Arial", 11),
-# In Python speichert `=` hier einen Wert in `fg_color`.
-            fg_color="#555555",
-# Hier wird der Button in Python mit der Methode für Start/Stopp verbunden.
-            command=self.toggle_cleaned_signal
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        )
-# In Python wird mit `.` ein UI-Element im Layout platziert.
-        self.btn_toggle_clean.pack(side="right")
 # Leerzeile zur besseren Lesbarkeit.
 
 # `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
@@ -7542,40 +7541,6 @@ class HomodyneGui:
         self.update_plot_data(s1_hist, s2_hist)
 # Leerzeile zur besseren Lesbarkeit.
 
-# `def` definiert in Python eine Funktion oder Methode. Hier: Schaltet die geglättete Anzeige um.
-    def toggle_cleaned_signal(self):
-# In Python speichert `=` einen Wert in `show_cleaned`.
-        self.show_cleaned = not self.show_cleaned
-# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
-        if self.show_cleaned:
-# In Python ruft `.` die Methode `configure` auf, um den Text eines UI-Elements zu ändern.
-            self.btn_toggle_clean.configure(text="Cleaned Signal: ON", fg_color=TEXT_COLOR)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S1_raw'].set_alpha(0.3)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S2_raw'].set_alpha(0.3)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S1_raw_clean'].set_visible(True)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S2_raw_clean'].set_visible(True)
-# `else` läuft in Python, wenn keine der vorherigen Bedingungen zutrifft.
-        else:
-# Umschalter für geglättete Daten.
-            self.btn_toggle_clean.configure(text="Cleaned Signal: OFF", fg_color="#555555")
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S1_raw'].set_alpha(1.0)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S2_raw'].set_alpha(1.0)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S1_raw_clean'].set_visible(False)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-            self.plot_lines['S2_raw_clean'].set_visible(False)
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        self.plot_axes['S1_raw'].legend(loc="upper right", prop={"size": 8})
-# In Python wird diese Zeile so ausgeführt, wie sie da steht.
-        self.plot_axes['S2_raw'].legend(loc="upper right", prop={"size": 8})
-# In Python ruft `.` eine eigene Methode auf.
-        self.update_plot()
 # Leerzeile zur besseren Lesbarkeit.
 
 # `def` definiert in Python eine Funktion oder Methode. Hier: update_plot_data
@@ -7598,14 +7563,10 @@ class HomodyneGui:
 
 # In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
         self.plot_lines['S1_raw'].set_data(x, s1_hist)
-# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
-        if self.show_cleaned and len(self.clean_s1_history) == len(x):
 # In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_lines['S1_raw_clean'].set_data(x, self.clean_s1_history)
-# `else` läuft in Python, wenn keine der vorherigen Bedingungen zutrifft.
-        else:
-# In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_lines['S1_raw_clean'].set_data([], [])
+        self.plot_lines['S1_raw_clean'].set_data([], [])
+# In Python wird mit `.` ein Plot-Element unsichtbar gemacht.
+        self.plot_lines['S1_raw_clean'].set_visible(False)
 # Leerzeile zur besseren Lesbarkeit.
 
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
@@ -7620,14 +7581,10 @@ class HomodyneGui:
 
 # In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
         self.plot_lines['S2_raw'].set_data(x, s2_hist)
-# `if` prüft in Python eine Bedingung und führt den Block nur dann aus.
-        if self.show_cleaned and len(self.clean_s2_history) == len(x):
 # In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_lines['S2_raw_clean'].set_data(x, self.clean_s2_history)
-# `else` läuft in Python, wenn keine der vorherigen Bedingungen zutrifft.
-        else:
-# In Python wird mit `.` eine Plot-Linie mit neuen Daten versorgt.
-            self.plot_lines['S2_raw_clean'].set_data([], [])
+        self.plot_lines['S2_raw_clean'].set_data([], [])
+# In Python wird mit `.` ein Plot-Element unsichtbar gemacht.
+        self.plot_lines['S2_raw_clean'].set_visible(False)
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.
         self.plot_axes['S2_raw'].relim()
 # In Python wird diese Zeile so ausgeführt, wie sie da steht.

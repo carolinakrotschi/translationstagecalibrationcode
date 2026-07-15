@@ -21,9 +21,6 @@ STEP_PAUSE_S = 0.05
 #the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
-#after counting a fringe, the system will ignore any new fringes for this amount of time, this is to avoid counting multiple fringes if the intensity fluctuates around the threshold
-FRINGE_COOLDOWN = 0.08
-
 MODE = "continuous"
 
 VELOCITY_MM_S = 0.0006
@@ -71,6 +68,13 @@ DEFAULT_STAGE_SPEED_MM_S = 0.000600
 def compute_quarter_wavelength_step_mm(wavelength_nm):
 
     return (wavelength_nm / 4) / 1_000_000
+
+def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
+    velocity_mm_s = abs(float(velocity_mm_s))
+    if velocity_mm_s <= 1e-12:
+        return float("inf")
+    fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
+    return fringe_period_s / 8.0
 
 # -----------------------------------------------------------------------------
 # 3.1 COLORS AND FILTER TIMINGS
@@ -1167,9 +1171,14 @@ class SideApp(ctk.CTk):
                 if self.half_fringe_count >= 2:
                     hyst_triggered = True
 
+        stage_velocity = getattr(
+            getattr(self, "stage", None),
+            "velocity",
+            VELOCITY_MM_S
+        )
         cooldown_ok = (
             time.time() - self.last_count_time
-        ) > FRINGE_COOLDOWN
+        ) > compute_fringe_cooldown_s(stage_velocity)
 
         abs_triggered = (
             self.was_dark
