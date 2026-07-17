@@ -28,6 +28,7 @@ FRINGE_REARM_FRACTION = 0.20
 RAW_HISTORY_LENGTH = 300
 SMOOTHING_WINDOW_LENGTH = 1
 STEP_PAUSE_S = 0.05
+#the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
 REQUIRED_DARK_FRAMES = 1
 REQUIRED_BRIGHT_FRAMES = 1
 FRINGE_COOLDOWN = SAMPLE_INTERVAL_S
@@ -88,6 +89,33 @@ TEXT_COLOR = "#0A4A51"
 GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
+
+# the program is built around one main part
+
+# SideApp: connects the diode handler and stage controller, builds the graphical user interface, .... (everything)
+
+# So that you do not have to understand every line of the code, I will now explain the complete path of a photodiode measurement through this file
+# 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+# 1. The application is initialized: SideApp : __init__() : initializes the measurement values, selects the diode handler, connects the stage, and prepares the user interface
+# 2. The user interface and live plot are created: SideApp : build_ui() / build_plot() : creates all controls, labels, stage elements, and the live voltage or ratio graph
+# 3. Monitoring is controlled: SideApp : toggle() / start_monitoring() / stop_monitoring() : starts or stops the measurement, resets old values, and controls the background thread
+# 4. The photodiode measurement loop runs: SideApp : loop() : connects to the NI device, performs calibration, reads samples, counts fringes, and updates the interface
+# 5. Calibration samples are processed: SideApp : handle_calibration_sample() / update_calibration_progress_ui() : calculates the diode ratio when required and displays the calibration progress
+# 6. Calibration is completed: SideApp : finish_calibration_display() : calculates the minimum, maximum, thresholds, and hysteresis from the measured calibration values
+# 7. New measurement values are displayed: SideApp : update_ui_display() : updates the diode voltages, ratio, normalized signal, fringe count, distance, and time delay
+# 8. Fringes are detected and counted: SideApp : update_accumulated_fringes() : smooths the signal and combines threshold and hysteresis detection
+# 9. The live signal history is handled: SideApp : append_raw_history() / update_plot() : stores recent voltage or ratio values and displays them in the graph
+# 10. Errors, stopped states, and resets are handled: SideApp : show_error() / finish_stopped_ui() / restart() / restart_values_only() : displays errors and resets all measurement and interface values
+# 11. User inputs are read and applied: SideApp : parse_entry_float() / get_step_size() / get_stage_speed() / apply_wavelength() / apply_stage_speed() : validates the wavelength, step size, and stage speed
+# 12. Stage movements are prepared and started: SideApp : prepare_stage_for_move() / start_stage_move_to() / start_stage_move_by() : checks the stage and starts absolute or relative movement
+# 13. Stepped stage movements are executed: SideApp : start_stage_move_to_stepped() / start_stage_move_by_steps() / stage_stepped_move_worker() : divides a movement into smaller steps and performs them
+# 14. Stage movement is monitored and completed: SideApp : stage_ui_loop() / finish_stage_move() : tracks the current position, movement distance, and final position
+# 15. Manual stage controls are processed: SideApp : move_to_min() / step_negative() / move_to_center() / step_positive() / move_to_max() / move_to_target() / move_distance() / stop_stage() : executes the stage button commands
+# 16. Stage values are displayed and reset: SideApp : update_stage_position_once() / update_stage_labels() / reset_stage_speed_tracking() / update_stage_speed_label() / reset_stage_movement_tracking() : updates position, speed, and accumulated movement
+# 17. Driven and calculated distances are compared: SideApp : update_comparison_labels() : compares stage movement with the distance calculated from the fringe count
+# 18. Automatic and calibration movements are performed: SideApp : run_stage_motion_by_parameters() / calibration_stage_motion() / finish_calibration_movement() : runs predefined movements and moves the stage during calibration
+# 19. The application is closed and started: SideApp : on_close() / __main__ : closes the diode and stage connections and starts or ends the graphical application
+
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)

@@ -1,4 +1,4 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: PIPython
 Version: 2.10.2.1
 Summary: Collection of libraries to use PI devices and process GCS data.
@@ -15,6 +15,9 @@ Description-Content-Type: text/markdown
 License-File: eula.md
 Requires-Dist: pyusb
 Requires-Dist: pyserial
+Dynamic: description-content-type
+Dynamic: license-file
+Dynamic: requires-python
 
 # PIPython
 

@@ -79,9 +79,46 @@ REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
 #after calibration, 2s cooldown so that no buttons can be pressed immediately
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
+#mode for target, distance and center movements: "continuous" or "stepped"
 MODE = "continuous"
 CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
 STAGE_STATUS_POLL_MS = 100
+
+# the program is built around one main class
+
+# InterferometerApp: connects the camera and stage classes, builds the graphical user interface, (does everything)
+
+# So that you do not have to understand every line of the code, I will now explain the complete path of an interferometer measurement through this file
+# 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+# 1. The application is initialized: InterferometerApp : __init__() : creates the user interface, initializes all measurement variables, and prepares the camera and translation stage
+# 2. The hardware connection is started: InterferometerApp : connect_hardware() : connects the translation stage and starts the camera connection in a background thread
+# 3. The camera is connected: InterferometerApp : connect_camera_after_stage() : connects the camera after the stage connection attempt has finished
+# 4. The hardware connection result is processed: InterferometerApp : on_hardware_connected() : stores the connection states, enables the buttons, and updates the status display
+# 5. The interface buttons are enabled or disabled: InterferometerApp : set_buttons_enabled() : changes the state of all control buttons
+# 6. The calibration button cooldown is handled: InterferometerApp : start_calibration_button_cooldown() / finish_calibration_button_cooldown() : temporarily disables the controls after calibration
+# 7. Monitoring is started or stopped: InterferometerApp : toggle() : starts calibration and the camera loop or stops the measurement and stage movement
+# 8. The measurement is reset: InterferometerApp : restart() / restart_values_only() : resets the fringe count, calibration state, movement tracking, and displayed values
+# 9. An absolute stage movement is started: InterferometerApp : start_stage_move_to() : validates the movement command and moves the stage to an absolute position
+# 10. A relative stage movement is started: InterferometerApp : start_stage_move_by() : calculates a new target from the current stage position
+# 11. A stepped stage movement is started: InterferometerApp : start_stage_move_to_stepped() / start_stage_move_by_steps() : moves the stage to a target using several individual steps
+# 12. The stepped movement is executed: InterferometerApp : stage_stepped_move_worker() : performs each movement step and continuously updates the user interface
+# 13. The stage settings are read and applied: InterferometerApp : get_step_size() / get_stage_speed() / apply_stage_speed() / use_continuous_stage_mode() : reads the movement settings and configures the selected movement mode
+# 14. The interferometer parameters are calculated: InterferometerApp : compute_fringe_distance() / apply_wavelength() : calculates the fringe distance and updates it when the laser wavelength changes
+# 15. The stage buttons are processed: InterferometerApp : move_to_min() / step_negative() / move_to_center() / step_positive() / move_to_max() / move_to_target_by_steps() / move_distance_by_steps() / stop_stage() : executes the different manual stage commands
+# 16. The stage movement is monitored: InterferometerApp : stage_ui_loop() : tracks the current stage position and accumulated movement while the stage is moving
+# 17. The stage display is updated: InterferometerApp : update_stage_position_once() / update_stage_labels() : displays the current position and total stage movement
+# 18. The movement tracking is reset: InterferometerApp : reset_stage_movement_tracking() : resets the accumulated movement and defines a new reference position
+# 19. The measurement display is reset after calibration: InterferometerApp : reset_measurement_after_calibration() : clears the fringe count, distance, time delay, and comparison values
+# 20. The calibration stage movement is controlled: InterferometerApp : calibration_stage_motion() / finish_calibration_stage_reset() : moves the stage during calibration and stops it when calibration is complete
+# 21. The stage is returned after calibration: InterferometerApp : start_pending_center_after_calibration() / move_to_center_after_calibration() / reset_stage_after_calibration() : returns or resets the stage after the calibration movement
+# 22. The measured and driven distances are compared: InterferometerApp : update_comparison_labels() : compares the stage movement with the distance calculated from the fringe count
+# 23. The camera and measurement loop runs: InterferometerApp : loop() : acquires camera frames, performs calibration, detects fringes, and calculates distance and time delay
+# 24. Fringes are detected and counted: InterferometerApp : update_accumulated_fringes() : filters the intensity signal and counts stable dark-to-bright transitions
+# 25. The measurement values are displayed: InterferometerApp : update_intensity_label() / update_values() : updates the intensity, distance, time delay, and comparison labels
+# 26. The live camera image is displayed: InterferometerApp : update_image() : normalizes, resizes, and shows the current camera frame
+# 27. The application is closed: InterferometerApp : on_close() : stops monitoring, closes the camera and stage connections, and destroys the user interface
+# 28. The program is started: __main__ : app.mainloop() : creates the application window and starts the graphical user interface
+
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -1819,12 +1856,12 @@ class InterferometerApp(ctk.CTk):
             if frame_counter % 3 == 0:
                 # Heavy image processing in background thread
                 display = img.astype(np.float32)
-                display -= np.min(display) 
-                if np.max(display) > 0:
+                display -= np.min(display)
+                if np.max(display) > 0: #normalize only when image contains nonzero signal
                     display /= np.max(display)
-                display = (display * 255).astype(np.uint8)
-                pil_image = Image.fromarray(display).convert("RGB")
-                pil_image = pil_image.resize(self.live_size)
+                display = (display * 255).astype(np.uint8) #convert normalized image into brightness value
+                pil_image = Image.fromarray(display).convert("RGB") #convert to rgb image
+                pil_image = pil_image.resize(self.live_size) #resize camera image to preview area
 
                 fringe_to_report = any_fringe_counted_in_batch
                 any_fringe_counted_in_batch = False

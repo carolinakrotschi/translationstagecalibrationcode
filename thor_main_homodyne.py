@@ -143,6 +143,38 @@ GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
 
+#the program is built in a way, that its made of 6 main classes: 
+
+# HomodyneSample : saves one processed measurement sample (with raw values, normalized values, phase,...)
+#NIPhotodiodeReader : opens the channels and reads them and then closes the connection again
+#SingleSignalFringeCounter : Analyzes one signal only, estimates fringe amplitude,...
+#HomodyneQuadratureCounter: computes phase with atan2, determines direction,...
+#HomodyneMonitor : Connects these classed and delivers the finished samples to the GUI (graphical user interface)
+#HomodyneGui: builds the user interface, controls everything, updates labels,... also starts the background measurement thread
+
+  
+# So that you do not have to understand every line of the code, I will now explain the complete path of a signal through all these classes (following the structure of 0.)
+    # 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+    # 1. Hardware reads raw data: NIPhotodiodeReader : read() : reads raw_s1 and raw_s2 from the NI hardware
+    # 2. Monitoring loop receives the values: HomodyneGui : measurement_loop() : pulls the raw values from the reader and starts the processing chain
+    # 3. Baseline is removed: HomodyneGui : measurement_loop() : subtracts baseline_s1 and baseline_s2 so the DC offset is removed
+    # 4. Low-pass filtering is applied: HomodyneGui : measurement_loop() : smooths the corrected raw values into lp_clean_s1 and lp_clean_s2
+    # 5. Single-signal fringe analysis runs in parallel: SingleSignalFringeCounter : calibrate() and update() : estimates fringe visibility and fringe count from one signal only
+    # 6. Filtered values are passed into the monitor: HomodyneMonitor : read() : forwards the cleaned values into the quadrature counter
+    # 7. Signals are normalized: HomodyneQuadratureCounter : normalize() : converts the raw voltages into centered and scaled signal coordinates
+    # 8. Phase is computed: HomodyneQuadratureCounter : update() : uses atan2(s2, s1) to calculate the instantaneous phase
+    # 9. Phase jumps are removed: HomodyneQuadratureCounter : update() : uses wrap_to_pi() and unwrapped_phase_rad to build a continuous phase trace
+    # 10. Fringe position is computed: HomodyneQuadratureCounter : update() : converts unwrapped_phase_rad into fringe_position by dividing by 2*pi
+    # 11. Whole fringes are counted: HomodyneQuadratureCounter : update() : turns fringe_position into signed_fringes and fringe_delta
+    # 12. Direction is estimated: HomodyneQuadratureCounter : update() : uses the recent phase history and a hysteresis rule to decide forward, backward, or none
+    # 13. Final sample object is created: HomodyneQuadratureCounter : update() : returns a HomodyneSample containing all computed values
+    # 14. Sample is stored for the GUI: HomodyneGui : measurement_loop() : writes latest_sample and latest_distance_mm
+    # 15. Distance is converted to millimeters: HomodyneQuadratureCounter : signed_distance_mm() : multiplies the fringe count by fringe_distance_mm
+    # 16. GUI updates the labels: HomodyneGui : update_ui_loop() : reads latest_sample and updates the text fields
+    # 17. GUI updates the plot: HomodyneGui : update_plot() and update_plot_data() : redraws raw signals, fit lines, and the Lissajous circle
+
+#disclaimer: these are not all the functions used in the code
+
 # -----------------------------------------------------------------------------
 # 3.2 HELPER CLASSES AND DATACLASSES
 # -----------------------------------------------------------------------------
@@ -837,6 +869,7 @@ class HomodyneGui:
         
         # Measurement state variables
         self.measuring = False
+        #for the 5s calibration at the beginning
         self.calibrating = False
 
         self.stage = StageController() if StageController is not None else None
@@ -3330,7 +3363,7 @@ class HomodyneGui:
 
         self.maybe_start_lock_correction(drift_mm, correction_mm)
 
-    #extremely small drift is ignored
+    #extremely small drift is ignored (which drift exactly could be adjusted here)
     def lock_deadband_mm(self):
         fringe_distance_mm = self.monitor.counter.fringe_distance_mm
 

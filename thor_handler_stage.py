@@ -26,13 +26,39 @@ REQUESTED_ACCELERATION = 1.0
 FALLBACK_MOVING_ACCELERATION = 1.0
 MIN_ACCELERATION = 0.5
 
+# So that you do not have to understand every line of the code, I will now explain the complete path of a stage command through this file
+# 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+
+# 1. The stage controller is initialized: StageController : __init__() : stores the serial number, movement parameters, position limits, and connection state
+# 2. Available devices are searched: StageController : _get_discovered_serial_numbers() : reads all connected Thorlabs device serial numbers
+# 3. The stage serial number is selected: StageController : _resolve_serial_number() : uses the configured serial number or selects the first detected device
+# 4. The stage is connected: StageController : connect() : creates the stage object, connects the hardware, starts polling, and enables the device
+# 5. The motor settings are loaded: StageController : connect() : waits for initialization and loads the motor configuration
+# 6. The stage is referenced: StageController : connect() : performs homing after connection when automatic homing is enabled
+# 7. Hardware readiness is checked: StageController : _wait_until_ready() : waits until the stage position can be read
+# 8. The homing state is checked: StageController : needs_homing() : determines whether the stage still requires referencing
+# 9. The current position is read: StageController : get_position() : queries the current stage position and stores it for the UI
+# 10. The target position is limited: StageController : clamp_position() : restricts movement commands to the physical travel range (0.0 mm to 300.0 mm)
+# 11. An absolute movement is started: StageController : move_absolute() : checks the stage state and prepares movement to a target position
+# 12. The stage moves in the background: StageController : move_absolute() : runs the hardware movement in a separate thread so the UI remains responsive
+# 13. The final position is updated: StageController : move_absolute() : reads the position again after the movement is completed
+# 14. A relative movement is started: StageController : move_relative() : calculates a new target from the current position and relative distance
+# 15. The velocity is read: StageController : set_velocity() : returns the current hardware velocity when no new value is provided
+# 16. The velocity is configured: StageController : set_velocity() : applies the selected velocity and acceleration to the stage
+# 17. The acceleration is limited: StageController : set_velocity() : ensures that the hardware acceleration does not fall below the minimum value
+# 18. The stage is stopped: StageController : stop() : immediately stops the motor and updates the current and target positions
+# 19. The connection is closed: StageController : close() : stops polling, disconnects the device, and resets the connection state
+# 20. The example program runs: main program : __main__ : connects the stage, sets the velocity, moves to 150 mm, reads the final position, and closes the connection
+
 # -----------------------------------------------------------------------------
 # 2. STAGECONTROLLER CLASS AND CONNECTION
 # -----------------------------------------------------------------------------
 class StageController:
 
+    # initialize the stage controller
     def __init__(self, serial_no="45517804"):
 
+        #initialize all the variables
         self.serial_no = serial_no
         self.device = None
         self.connected = False
@@ -185,7 +211,7 @@ class StageController:
 # -----------------------------------------------------------------------------
 # 4. POSITION QUERYING AND LIMITS
 # -----------------------------------------------------------------------------
-    #for the UI it is essential, that the current position is always available
+    #read the current stage position and keep it up to date for the UI
     def get_position(self):
 
         if not self.connected:
@@ -204,14 +230,14 @@ class StageController:
 
         return self.current_position
 
-    #limits the position to the physical limits of the stage (0.0 mm to 300.0 mm)
+    #limit the target position to the physical travel range of the stage (0.0 mm to 300.0 mm)
     def clamp_position(self, pos):
         return max(self.min_position, min(self.max_position, float(pos)))
 
 # -----------------------------------------------------------------------------
 # 5. MOTION COMMANDS
 # -----------------------------------------------------------------------------
-    #for driving to an absolute position, does that in the background, so that the UI is still usable
+    #move the stage to an absolute position; runs in a background thread so the UI stays responsive
     def move_absolute(self, target_mm):
 
         if not self.connected:
@@ -229,8 +255,8 @@ class StageController:
 
         def worker():
             try:
-                self.device.MoveTo(Decimal(float(target_mm)), 180000) #scan the motion command
-                self.current_position = self.get_position() #after arrival, question the position again
+                self.device.MoveTo(Decimal(float(target_mm)), 180000) #start the movement command
+                self.current_position = self.get_position() #update the position after arrival
 
             #in case of failure (cable unplugged, ...)
             except Exception as e:
@@ -238,18 +264,19 @@ class StageController:
                 print(self.last_error)
 
             finally:
-                self.is_moving = False #at the end, when the stage is not moving anymore, set is_moving to false, so that the UI knows that the stage is not moving anymore
+                self.is_moving = False #movement finished: reset is_moving so the UI knows the stage stopped moving
 
         threading.Thread(target=worker, daemon=True).start()
         return True
 
-    #moves stage by relative distance
+    #move the stage by a relative distance from the current position
     def move_relative(self, delta):
         return self.move_absolute(self.get_position() + delta)
 
 # -----------------------------------------------------------------------------
 # 6. VELOCITY AND PARAMETER CONFIGURATIONS
 # -----------------------------------------------------------------------------
+    #set or read the stage velocity
     def set_velocity(self, vel=None, acceleration_mm_s2=None):
 
         if vel is None:
@@ -299,7 +326,7 @@ class StageController:
             print(self.last_error)
             return False
 
-    #stops the stage (emergency stop when UI stop button is pressed)
+    #stop the current stage movement (emergency stop when UI stop button is pressed)
     def stop(self):
 
         stopped = False
@@ -315,13 +342,14 @@ class StageController:
 
         if stopped:
             time.sleep(0.05)
-            self.is_moving = False #adjusts the position to the point where the stage stopped
-            self.current_position = self.get_position()
+            self.is_moving = False #movement finished: reset is_moving so the UI knows the stage stopped moving
+            self.current_position = self.get_position() #reflect the position where the stage actually stopped
             self.target_position = self.current_position
 
 # -----------------------------------------------------------------------------
 # 7. CLEANUP AND CONNECTION CLOSE
 # -----------------------------------------------------------------------------
+    #close the stage connection
     def close(self):
 
         try:

@@ -16,8 +16,8 @@
 # 1. BASIC SETTINGS
 # -----------------------------------------------------------------------------
 
-PHOTODIODE_CHANNEL_S1 = "Dev1/ai0"
-PHOTODIODE_CHANNEL_S2 = "Dev1/ai1"
+PHOTODIODE_CHANNEL_S1 = "Dev1/ai0" #diode signal NI port
+PHOTODIODE_CHANNEL_S2 = "Dev1/ai1" #reference signal NI port
 
 CALIBRATION_SECONDS = 5.0
 CALIBRATION_STAGE_DISTANCE_MM = 0.01
@@ -26,11 +26,11 @@ CALIBRATION_STAGE_SPEED_MM_S = (
     2 * CALIBRATION_STAGE_DISTANCE_MM
 ) / CALIBRATION_STAGE_MOTION_SECONDS
 
-RAW_HISTORY_LENGTH = 300
-STEP_PAUSE_S = 0.05
-STAGE_STATUS_POLL_MS = 100
+RAW_HISTORY_LENGTH = 300 #number of raw signals that get kept in the history for plotting
+STEP_PAUSE_S = 0.05 #pause in between two steps
+STAGE_STATUS_POLL_MS = 100 #how often stage status gets polled
 
-SAMPLE_INTERVAL_S = 0.005
+SAMPLE_INTERVAL_S = 0.005 #measurement interval
 
 # Threshold for classifying movement direction (reduces tiny jitter being labeled)
 DIRECTION_THRESHOLD = 0.004
@@ -41,7 +41,7 @@ DEFAULT_NOISE_AMPLITUDE_V = (
     EXPECTED_FRINGE_AMPLITUDE_V / MIN_FRINGE_TO_NOISE_RATIO
 )
 DEFAULT_FRINGE_AMPLITUDE_V = EXPECTED_FRINGE_AMPLITUDE_V
-MIN_VALID_FRINGE_AMPLITUDE_V = 0.005
+MIN_VALID_FRINGE_AMPLITUDE_V = 0.005 
 MAX_VALID_FRINGE_AMPLITUDE_V = 0.020
 FRINGE_RISE_FRACTION = 0.50
 FRINGE_REARM_FRACTION = 0.25
@@ -70,7 +70,7 @@ STAGE_CORRECTION_SIGN = -1
 STAGE_MOVE_TIMEOUT_S = 60.0
 STAGE_CHECK_TIMEOUT_S = 180.0
 STAGE_POLL_INTERVAL_S = 0.05
-PLOT_SAMPLE_WINDOW = 200
+PLOT_SAMPLE_WINDOW = 200 #numbers of samples that are actually plotted
 
 # -----------------------------------------------------------------------------
 # 2. IMPORTS
@@ -109,16 +109,17 @@ else:
 LASER_WAVELENGTH_NM = 787.3
 SPEED_OF_LIGHT_MM_PS = 0.299792458
 
-PHASE_DIRECTION_SIGN = 1
+PHASE_DIRECTION_SIGN = 1 #which phase direction is seen as positive
 
 MIN_SIGNAL_RADIUS = 0.05
 MIN_VISIBLE_FRINGE_AMPLITUDE_V = 0.004
 MAX_VISIBLE_FRINGE_AMPLITUDE_V = 0.060
 
 DEFAULT_STAGE_SPEED_MM_S = 0.000600
+# Convert the laser wavelength into a fringe distance
 def compute_fringe_distance_mm(wavelength_nm):
     return (wavelength_nm / 2) / 1_000_000
-
+# Compute the cooldown time between fringe counts
 def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
     velocity_mm_s = abs(float(velocity_mm_s))
     if velocity_mm_s <= 1e-12:
@@ -126,9 +127,11 @@ def compute_fringe_cooldown_s(velocity_mm_s, wavelength_nm=LASER_WAVELENGTH_NM):
     fringe_period_s = compute_fringe_distance_mm(wavelength_nm) / velocity_mm_s
     return fringe_period_s / 8.0
 
+# Wrap an angle into the range from -pi to +pi
 def wrap_to_pi(angle_rad):
     return (angle_rad + math.pi) % (2 * math.pi) - math.pi
 
+# Round a fringe position to completed signed fringes
 def completed_signed_fringes(fringe_position):
     if fringe_position == 0:
         return 0
@@ -145,10 +148,43 @@ GREEN_COLOR = "#1EAD4F"
 RED_COLOR = "#C0392B"
 ORANGE_COLOR = "#D35400"
 
+
+#the program is built in a way, that its made of 6 main classes: 
+
+# HomodyneSample : saves one processed measurement sample (with raw values, normalized values, phase,...)
+#NIPhotodiodeReader : opens the channels and reads them and then closes the connection again
+#SingleSignalFringeCounter : Analyzes one signal only, estimates fringe amplitude,...
+#HomodyneQuadratureCounter: computes phase with atan2, determines direction,...
+#HomodyneMonitor : Connects these classed and delivers the finished samples to the GUI (graphical user interface)
+#HomodyneGui: builds the user interface, controls everything, updates labels,... also starts the background measurement thread
+
+  
+# So that you do not have to understand every line of the code, I will now explain the complete path of a signal through all these classes (following the structure of 0.)
+    # 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+    # 1. Hardware reads raw data: NIPhotodiodeReader : read() : reads raw_s1 and raw_s2 from the NI hardware
+    # 2. Monitoring loop receives the values: HomodyneGui : measurement_loop() : pulls the raw values from the reader and starts the processing chain
+    # 3. Baseline is removed: HomodyneGui : measurement_loop() : subtracts baseline_s1 and baseline_s2 so the DC offset is removed
+    # 4. Low-pass filtering is applied: HomodyneGui : measurement_loop() : smooths the corrected raw values into lp_clean_s1 and lp_clean_s2
+    # 5. Single-signal fringe analysis runs in parallel: SingleSignalFringeCounter : calibrate() and update() : estimates fringe visibility and fringe count from one signal only
+    # 6. Filtered values are passed into the monitor: HomodyneMonitor : read() : forwards the cleaned values into the quadrature counter
+    # 7. Signals are normalized: HomodyneQuadratureCounter : normalize() : converts the raw voltages into centered and scaled signal coordinates
+    # 8. Phase is computed: HomodyneQuadratureCounter : update() : uses atan2(s2, s1) to calculate the instantaneous phase
+    # 9. Phase jumps are removed: HomodyneQuadratureCounter : update() : uses wrap_to_pi() and unwrapped_phase_rad to build a continuous phase trace
+    # 10. Fringe position is computed: HomodyneQuadratureCounter : update() : converts unwrapped_phase_rad into fringe_position by dividing by 2*pi
+    # 11. Whole fringes are counted: HomodyneQuadratureCounter : update() : turns fringe_position into signed_fringes and fringe_delta
+    # 12. Direction is estimated: HomodyneQuadratureCounter : update() : uses the recent phase history and a hysteresis rule to decide forward, backward, or none
+    # 13. Final sample object is created: HomodyneQuadratureCounter : update() : returns a HomodyneSample containing all computed values
+    # 14. Sample is stored for the GUI: HomodyneGui : measurement_loop() : writes latest_sample and latest_distance_mm
+    # 15. Distance is converted to millimeters: HomodyneQuadratureCounter : signed_distance_mm() : multiplies the fringe count by fringe_distance_mm
+    # 16. GUI updates the labels: HomodyneGui : update_ui_loop() : reads latest_sample and updates the text fields
+    # 17. GUI updates the plot: HomodyneGui : update_plot() and update_plot_data() : redraws raw signals, fit lines, and the Lissajous circle
+
+#disclaimer: these are not all the functions used in the code
 # -----------------------------------------------------------------------------
 # 3.2 HELPER CLASSES AND DATACLASSES
 # -----------------------------------------------------------------------------
 
+#building plan of the datatypes of variables in the homodyne class
 @dataclass
 class HomodyneSample:
     timestamp: float
@@ -171,6 +207,7 @@ class NIPhotodiodeReader:
     # 4.1 INITIALIZATION
     # -----------------------------------------------------------------------------
 
+    # Initialize the NI photodiode reader state
     def __init__(
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
@@ -181,7 +218,8 @@ class NIPhotodiodeReader:
         self.task = None
         self.nidaqmx = None
 
-    def connect(self):
+    # Open the NI task and add both analog input channels
+    def connect(self): #connects NIPhotodiodereader to hardware
         import nidaqmx
 
         self.nidaqmx = nidaqmx
@@ -189,7 +227,7 @@ class NIPhotodiodeReader:
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s1)
         self.task.ai_channels.add_ai_voltage_chan(self.channel_s2)
         return True
-
+    # Read one raw sample pair from the NI task
     def read(self):
         if self.task is None:
             raise RuntimeError("NI task is not connected.")
@@ -203,6 +241,7 @@ class NIPhotodiodeReader:
 
         return float(values[0]), float(values[1])
 
+    # Close the NI task
     def close(self):
         if self.task is not None:
             self.task.close()
@@ -213,6 +252,7 @@ class SingleSignalFringeCounter:
     # 4.1 INITIALIZATION
     # -----------------------------------------------------------------------------
 
+    # Initialize the single-signal fringe counter state
     def __init__(self, sample_interval_s=0.005):
         self.sample_interval_s = sample_interval_s
         self.min_voltage = 0.0
@@ -227,7 +267,7 @@ class SingleSignalFringeCounter:
         self.fringe_rearm_threshold_voltage = (
             DEFAULT_FRINGE_AMPLITUDE_V * FRINGE_REARM_FRACTION
         )
-        self.fringe_trough_voltage = None
+        self.fringe_trough_voltage = None #noted lowest point of the signal
         self.fringe_peak_voltage = None
         self.dark_threshold = 0.0
         self.bright_threshold = 0.0
@@ -239,13 +279,13 @@ class SingleSignalFringeCounter:
         self.bright_counter = 0
         self.last_count_time = 0.0
         self.accumulated_fringes = 0
-
+    # Estimate fringe amplitude and visibility from one signal
     def calibrate(self, s1_values):
         self.fringes_visible = False
 
         if not s1_values:
             return
-
+        #calibrate a smooth signal from the raw signal by centering the newest 5 values
         smoothed_samples = []
         for index in range(len(s1_values)):
             start_index = max(0, index - 2)
@@ -253,13 +293,13 @@ class SingleSignalFringeCounter:
             window = s1_values[start_index:end_index]
             smoothed_samples.append(sum(window) / len(window))
 
-        self.min_voltage = min(smoothed_samples)
+        self.min_voltage = min(smoothed_samples) #determine voltage from smoothed signal
         self.max_voltage = max(smoothed_samples)
         self.offset_voltage = (self.min_voltage + self.max_voltage) / 2
         self.scale_voltage = (self.max_voltage - self.min_voltage) / 2
-        if self.scale_voltage <= 1e-12:
+        if self.scale_voltage <= 1e-12: #avoid division by zero if signal is nearly flat
             self.scale_voltage = 1.0
-
+        #collect local minima and maxima
         minima = []
         maxima = []
         extrema = []
@@ -267,7 +307,7 @@ class SingleSignalFringeCounter:
             prev_val = smoothed_samples[index - 1]
             curr_val = smoothed_samples[index]
             next_val = smoothed_samples[index + 1]
-            if (curr_val <= prev_val and curr_val < next_val) or (curr_val < prev_val and curr_val <= next_val):
+            if (curr_val <= prev_val and curr_val < next_val) or (curr_val < prev_val and curr_val <= next_val): #local minimum wehn current value below its neighbors
                 minima.append(curr_val)
                 extrema.append(("min", curr_val))
             if (curr_val >= prev_val and curr_val > next_val) or (curr_val > prev_val and curr_val >= next_val):
@@ -278,7 +318,7 @@ class SingleSignalFringeCounter:
         visible_amplitude = False
         if minima and maxima:
             compressed_extrema = []
-            for kind, value in extrema:
+            for kind, value in extrema: #walk through the extrema and find the highest and lowest
                 if compressed_extrema and compressed_extrema[-1][0] == kind:
                     prev_kind, prev_val = compressed_extrema[-1]
                     if kind == "min" and value < prev_val:
@@ -287,12 +327,12 @@ class SingleSignalFringeCounter:
                         compressed_extrema[-1] = (prev_kind, value)
                     continue
                 compressed_extrema.append((kind, value))
-
+            #put neighboring extrema for candidate amplitudes
             amplitudes = []
             for index in range(1, len(compressed_extrema)):
                 prev_kind, prev_val = compressed_extrema[index - 1]
                 curr_kind, curr_val = compressed_extrema[index]
-                if prev_kind != curr_kind:
+                if prev_kind != curr_kind: #only opposite extrema form an amplitude
                     amp = abs(curr_val - prev_val)
                     if (
                         MIN_VISIBLE_FRINGE_AMPLITUDE_V
@@ -311,7 +351,7 @@ class SingleSignalFringeCounter:
             self.fringe_amplitude_voltage,
             EXPECTED_FRINGE_AMPLITUDE_V
         )
-        self.fringe_rise_threshold_voltage = (
+        self.fringe_rise_threshold_voltage = ( #set the rise threshold
             detection_amplitude_voltage * 0.98
         )
         self.fringe_rearm_threshold_voltage = (
@@ -324,7 +364,7 @@ class SingleSignalFringeCounter:
         self.bright_threshold = self.min_voltage + value_range * BRIGHT_LEVEL_FRACTION
 
         self.reset()
-
+    # Reset the single-signal counter state
     def reset(self):
         self.fringe_trough_voltage = None
         self.fringe_peak_voltage = None
@@ -334,7 +374,7 @@ class SingleSignalFringeCounter:
         self.bright_counter = 0
         self.last_count_time = 0.0
         self.accumulated_fringes = 0
-
+    # Update the fringe detector with one new voltage sample
     def update(self, voltage):
         self.smoothed_voltage_history.append(voltage)
         if len(self.smoothed_voltage_history) > SMOOTHING_WINDOW_LENGTH:
@@ -426,7 +466,8 @@ class HomodyneQuadratureCounter:
     # 4.1 INITIALIZATION
     # -----------------------------------------------------------------------------
 
-    def __init__(
+    # Initialize the quadrature counter state
+    def __init__( #set initial values from the window
         self,
         phase_direction_sign=PHASE_DIRECTION_SIGN,
         min_signal_radius=MIN_SIGNAL_RADIUS,
@@ -436,7 +477,7 @@ class HomodyneQuadratureCounter:
         self.phase_direction_sign = 1 if phase_direction_sign >= 0 else -1
         self.min_signal_radius = min_signal_radius
         self.fringe_distance_mm = fringe_distance_mm
-
+        #store normalization offsets for s1 and s2
         self.offset_s1 = 0.0
         self.offset_s2 = 0.0
         self.scale_s1 = 1.0
@@ -451,12 +492,13 @@ class HomodyneQuadratureCounter:
         self.current_direction = "none"
         self.center_s1 = 0.0
         self.center_s2 = 0.0
-
+    # Compute offsets and scales from collected calibration samples
     def calibrate_from_samples(self, raw_samples):
         with self.lock:
             if not raw_samples:
                 raise ValueError("No calibration samples were collected.")
 
+            #both channels are treated seperately
             s1_values = [sample[0] for sample in raw_samples]
             s2_values = [sample[1] for sample in raw_samples]
 
@@ -476,7 +518,7 @@ class HomodyneQuadratureCounter:
             self.center_s2 = self.offset_s2
 
             self._reset_unlocked()
-
+    # Store whether both signals are visible enough for fringe tracking
     def set_signal_visibility(self, s1_visible, s2_visible):
         with self.lock:
             self.s1_fringes_visible = bool(s1_visible)
@@ -485,17 +527,21 @@ class HomodyneQuadratureCounter:
             if not self.signals_visible_unlocked():
                 self._reset_unlocked()
 
+    # Return the visibility state without taking the lock
     def signals_visible_unlocked(self):
         return self.s1_fringes_visible and self.s2_fringes_visible
 
+    # Return the visibility state with thread safety
     def signals_visible(self):
         with self.lock:
             return self.signals_visible_unlocked()
 
+    # Reset the quadrature counter with locking
     def reset(self):
         with self.lock:
             self._reset_unlocked()
 
+    # Reset the quadrature counter internal state without locking
     def _reset_unlocked(self):
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
@@ -505,12 +551,12 @@ class HomodyneQuadratureCounter:
         self.current_direction = "none"
         self.center_s1 = self.offset_s1
         self.center_s2 = self.offset_s2
-
+    # Normalize raw voltages into centered and scaled values
     def normalize(self, raw_s1, raw_s2):
         s1 = (raw_s1 - self.offset_s1) / self.scale_s1
         s2 = (raw_s2 - self.offset_s2) / self.scale_s2
         return s1, s2
-
+    # Compute phase, unwrapped phase, fringe count, and direction
     def update(self, raw_s1, raw_s2):
         with self.lock:
             timestamp = time.time()
@@ -523,7 +569,7 @@ class HomodyneQuadratureCounter:
                 alpha = 0.002  # time constant ~ 500 samples = 2.5 seconds
                 self.center_s1 = alpha * raw_s1 + (1 - alpha) * self.center_s1
                 self.center_s2 = alpha * raw_s2 + (1 - alpha) * self.center_s2
-
+            #compute a radius from the drift compensated centered signal
             s1_centered = (raw_s1 - self.center_s1) / (self.scale_s1 if self.scale_s1 > 1e-12 else 1.0)
             s2_centered = (raw_s2 - self.center_s2) / (self.scale_s2 if self.scale_s2 > 1e-12 else 1.0)
             radius = math.hypot(s1_centered, s2_centered)
@@ -565,7 +611,7 @@ class HomodyneQuadratureCounter:
                     direction="signal_low",
                     valid=False
                 )
-
+            #convert the signal to pair phase angle on the unit circle
             phase_rad = self.phase_direction_sign * math.atan2(s2_centered, s1_centered)
 
             if self.previous_phase_rad is None:
@@ -577,7 +623,7 @@ class HomodyneQuadratureCounter:
                 )
                 self.unwrapped_phase_rad += delta_phase_rad
                 self.previous_phase_rad = phase_rad
-
+            # convert unwrapped phase to fringe units
             fringe_position = self.unwrapped_phase_rad / (2 * math.pi)
             new_signed_fringes = completed_signed_fringes(fringe_position)
             fringe_delta = new_signed_fringes - self.signed_fringes
@@ -597,6 +643,7 @@ class HomodyneQuadratureCounter:
             threshold = 0.003
             release_threshold = 0.001
 
+            #update inferred movement direction using hysteresis (direction doesnt jump between forward and backward but needs a certain signal again to change the state)
             if self.current_direction == "none":
                 if avg_delta_phase > threshold:
                     self.current_direction = "forward"
@@ -633,7 +680,7 @@ class HomodyneQuadratureCounter:
                 direction=direction,
                 valid=True
             )
-
+    # Convert the current signed fringe count into a distance
     def signed_distance_mm(self):
         with self.lock:
             if (
@@ -647,7 +694,7 @@ class HomodyneQuadratureCounter:
                 / (2 * math.pi)
                 * self.fringe_distance_mm
             )
-
+    # Convert the current distance into a correction back to zero
     def correction_to_zero_mm(self, stage_direction_sign=1):
         distance_mm = self.signed_distance_mm()
 
@@ -661,6 +708,7 @@ class HomodyneMonitor:
     # 4.1 INITIALIZATION
     # -----------------------------------------------------------------------------
 
+    # Initialize the homodyne monitor state
     def __init__(
         self,
         channel_s1=PHOTODIODE_CHANNEL_S1,
@@ -679,9 +727,11 @@ class HomodyneMonitor:
             sample_interval_s=SAMPLE_INTERVAL_S
         )
 
+    # Connect the reader to the hardware
     def connect(self):
         return self.reader.connect()
 
+    # Collect calibration samples and calibrate all counters
     def calibrate(
         self,
         seconds=CALIBRATION_SECONDS,
@@ -689,7 +739,7 @@ class HomodyneMonitor:
         should_continue=None,
         sample_callback=None
     ):
-        samples = []
+        samples = [] #stores all samples, when calibration starts
         start_time = time.time()
 
         while time.time() - start_time < seconds:
@@ -720,18 +770,21 @@ class HomodyneMonitor:
         )
         return samples
 
+    # Read one sample and update the counters
     def read(self):
         raw_s1, raw_s2 = self.reader.read()
         self.single_counter.update(raw_s2)
         return self.counter.update(raw_s1, raw_s2)
 
+    # Close the reader
     def close(self):
         self.reader.close()
 
+# Start the GUI application
 def run_gui():
     gui = HomodyneGui()
     gui.run()
-
+# Start the text output loop
 def run_print_loop():
     monitor = HomodyneMonitor()
 
@@ -783,7 +836,7 @@ class HomodyneGui:
     # 4.1 INITIALIZATION
     # -----------------------------------------------------------------------------
 
-    #ctk.CTk is the base class for the customtkinter window, here we inherit our InterferometerApp class from it
+    # Initialize the homodyne GUI state
     def __init__(self):
         if ctk is None:
             raise RuntimeError(
@@ -831,7 +884,7 @@ class HomodyneGui:
         self.last_sample_display_time = 0.0
 
         # Data recording variables
-        self.recording = False
+        self.recording = False #is recording active already?
         self.recorded_data = []
         self.recording_start_time = None
         self.recording_sample_stride = 5
@@ -893,6 +946,7 @@ class HomodyneGui:
     # 4.1.2 UI BUILD
     # -----------------------------------------------------------------------------
 
+    # Construct the full interface
     def build_ui(self):
         self.status = ctk.CTkLabel(
             self.scroll,
@@ -923,7 +977,7 @@ class HomodyneGui:
             control_frame,
             text="LOCK",
             width=110,
-            command=self.toggle_lock,
+            command=self.toggle_lock, # connects the button to the start/stop method
             fg_color=TEXT_COLOR,
             font=("Arial", 12, "bold")
         )
@@ -1546,6 +1600,7 @@ class HomodyneGui:
             text_color=TEXT_COLOR
         ).pack(pady=(8, 8))
 
+    # Build a labeled value row
     def make_value_label(self, parent, name, initial_value):
         row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=18, pady=5)
@@ -1569,6 +1624,7 @@ class HomodyneGui:
         label.pack(side="left", fill="x", expand=True)
         return label
 
+    # Build a wrapped explanatory label
     def make_formula_label(self, parent, text):
         label = ctk.CTkLabel(
             parent,
@@ -1582,12 +1638,14 @@ class HomodyneGui:
         label.pack(fill="x", padx=18, pady=2)
         return label
 
+    # Format the fringe distance for display
     def fringe_distance_text(self):
         return (
             f"Fringe distance: {self.fringe_distance_mm:.9f} mm "
             f"({self.fringe_distance_mm * 1000:.6f} um)"
         )
 
+    # Parse a float from a text entry
     def parse_entry_float(self, entry):
         return float(entry.get().replace(",", "."))
 
@@ -1595,6 +1653,7 @@ class HomodyneGui:
     # 5.8 APPLY A NEW LASER WAVELENGTH
     # -----------------------------------------------------------------------------
 
+    # Update wavelength-dependent values
     def apply_wavelength(self):
         self.append_recording_event("apply wavelength")
         if self.lock_active:
@@ -1647,6 +1706,7 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
+    # Update the stage step size
     def apply_stage_step_size(self):
         try:
             step_mm = self.parse_entry_float(self.step_entry)
@@ -1678,6 +1738,7 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
+    # Clamp a correction to one stage step
     def limited_stage_correction_mm(self, correction_mm):
         if self.stage_step_mm <= 0:
             return correction_mm
@@ -1686,19 +1747,24 @@ class HomodyneGui:
         return sign * min(abs(correction_mm), self.stage_step_mm)
 
     # -----------------------------------------------------------------------------
-    # 4.2 ENABLE OR DISABLE ALL BUTTONS
-    # -----------------------------------------------------------------------------
+# 4.2 Enable Or Disable All buttons
+# -----------------------------------------------------------------------------
 
+    # Enable or disable all stage-related buttons
     def set_buttons_enabled(self, enabled):
         state = "normal" if enabled else "disabled"
+# Iterate over the sequence sample by sample
         for button in self.all_buttons:
             button.configure(state=state)
 
+    # Mark a stage command as finished and re-enable controls
     def finish_stage_command_ui(self):
         self.stage_command_active = False
         self.set_buttons_enabled(True)
 
+    # Store a sample for deferred GUI display
     def queue_sample_display(self, sample, distance_mm, force=False):
+# Copy the shared data while holding the lock
         with self.sample_display_lock:
             self.pending_sample = sample
             self.pending_distance_mm = distance_mm
@@ -1719,7 +1785,9 @@ class HomodyneGui:
             self.flush_sample_display
         )
 
+    # Send the queued sample to the GUI
     def flush_sample_display(self):
+# Copy the shared data while holding the lock
         with self.sample_display_lock:
             sample = self.pending_sample
             distance_mm = self.pending_distance_mm
@@ -1732,6 +1800,7 @@ class HomodyneGui:
         if sample is not None:
             self.update_sample_display(sample, distance_mm)
 
+    # Update the status label from a worker thread
     def set_status_from_thread(self, text, color=TEXT_COLOR):
         self.root.after(
             0,
@@ -1742,6 +1811,7 @@ class HomodyneGui:
             )
         )
 
+    # Update the stage status label from a worker thread
     def set_stage_status_from_thread(self, text, color=TEXT_COLOR):
         self.root.after(
             0,
@@ -1752,6 +1822,7 @@ class HomodyneGui:
             )
         )
 
+    # Update the stage position label from a worker thread
     def set_stage_position_from_thread(self, position_mm):
         self.root.after(
             0,
@@ -1761,6 +1832,7 @@ class HomodyneGui:
             ) if p is not None else None
         )
 
+    # Wait until the stage stops moving or times out
     def wait_for_stage_motion(self, timeout_s=STAGE_MOVE_TIMEOUT_S):
         start_time = time.monotonic()
         last_position_update_s = 0.0
@@ -1786,28 +1858,30 @@ class HomodyneGui:
         self.set_stage_position_from_thread(position_mm)
         return position_mm
 
+    # Start or stop monitoring
     def toggle_monitoring(self):
-        self.append_recording_event("start monitoring")
         if self.monitoring:
             self.stop_monitoring()
         else:
             self.start_monitoring()
 
+    # Start or stop recording
     def toggle_recording(self):
         import time
         from tkinter import messagebox
         
         if self.recording:
-            self.append_recording_event("recording stopped")
             # Stop recording and save
+            # Remember that recording is no longer active
             self.recording = False
             self.btn_record.configure(
+                # Switch the button back to the start state
                 text="START RECORDING",
                 fg_color="#555555"
             )
             self.save_recorded_data()
         else:
-            # Start recording
+            # Start recording only while monitoring is already running
             if not self.monitoring:
                 messagebox.showwarning(
                     "Aufnahme",
@@ -1815,23 +1889,18 @@ class HomodyneGui:
                 )
                 return
             
+            # Clear previously collected export data
             self.recorded_data = []
+            # Store the recording start time
             self.recording_start_time = time.time()
-            self.recording_sample_counter = -1
+            # Mark recording as active
             self.recording = True
             self.btn_record.configure(
                 text="REC ● STOP",
                 fg_color=RED_COLOR
             )
 
-    def append_recording_event(self, label):
-        if not self.recording:
-            return
-
-        self.recorded_data.append(["------"])
-        self.recorded_data.append([label])
-        self.recorded_data.append(["------"])
-
+    # Write the recorded data to CSV
     def save_recorded_data(self):
         import datetime
         import csv
@@ -1850,6 +1919,7 @@ class HomodyneGui:
         
         if file_path:
             try:
+                # Open the file with a context manager so it closes automatically
                 with open(file_path, "w", newline="") as f:
                     writer = csv.writer(f)
                     writer.writerow([
@@ -1865,18 +1935,14 @@ class HomodyneGui:
                         "Fringe_Count",
                         "Stage_Position_mm"
                     ])
-                    for entry in self.recorded_data:
-                        if isinstance(entry, (list, tuple)):
-                            writer.writerow(entry)
-                        else:
-                            writer.writerow([entry])
+                    writer.writerows(self.recorded_data)
                 messagebox.showinfo("Erfolg", f"Daten erfolgreich in '{file_path}' gespeichert!")
             except Exception as e:
                 messagebox.showerror("Fehler", f"Fehler beim Speichern der Datei:\n{str(e)}")
 
+    # Start or stop the measurement mode
     def toggle_measurement(self):
         from tkinter import messagebox
-        self.append_recording_event("start measurement")
         if self.lock_active:
             messagebox.showwarning(
                 "Messung",
@@ -1898,9 +1964,11 @@ class HomodyneGui:
             # Start measurement
             self.start_measurement()
 
+    # Prepare a measurement run
     def start_measurement(self):
+        # Clear previously collected export data
         self.recorded_data = []  # Clear recorded data if any
-        # Reset counters
+        # Reset all counters before the new measurement run
         if self.monitor is not None:
             self.monitor.counter.reset()
             self.monitor.single_counter.reset()
@@ -1917,11 +1985,13 @@ class HomodyneGui:
 
         self.clean_s1_history = []
         self.clean_s2_history = []
+        # Clear the last stored sample
         self.latest_sample = None
         self.latest_distance_mm = None
         self.reset_calculation_display()
         
         self.measuring = True
+        # Calibration is now active
         self.calibrating = True
         
         self.btn_measurement.configure(
@@ -1929,8 +1999,10 @@ class HomodyneGui:
             fg_color=RED_COLOR
         )
 
+    # Stop measurement mode
     def stop_measurement(self):
         self.measuring = False
+        # Calibration also stops when measurement stops
         self.calibrating = False
         self.stop_calibration_stage_motion()
         
@@ -1946,10 +2018,9 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
-    # -----------------------------------------------------------------------------
-    # 5.1.1 START MONITORING HELPER
-    # -----------------------------------------------------------------------------
+    # 5.1.1 Start Monitoring Helper
 
+    # Start the monitor and background thread
     def start_monitoring(self):
         if (
             self.measurement_thread is not None
@@ -1961,10 +2032,13 @@ class HomodyneGui:
             wavelength_nm=self.laser_wavelength_nm
         )
         self.monitoring = True
+        # Calibration is not active at the start of monitoring
         self.calibrating = False
         self.measuring = False
+        # Clear the most recent sample cache
         self.latest_sample = None
         self.latest_distance_mm = None
+        # Clear the last error message
         self.last_error_text = None
         self.raw_s1_history = []
         self.raw_s2_history = []
@@ -1973,8 +2047,11 @@ class HomodyneGui:
         self.baseline_samples = []
         self.baseline_s1 = 0.0
         self.baseline_s2 = 0.0
+        # Remember whether the baseline noise has already been measured
         self.baseline_recorded = False
+        # Clear the raw samples gathered for calibration
         self.calibration_raw_samples = []
+        # Reset the pending sample queue under a lock
         with self.sample_display_lock:
             self.pending_sample = None
             self.pending_distance_mm = None
@@ -2000,16 +2077,16 @@ class HomodyneGui:
         )
         self.measurement_thread.start()
 
-    # -----------------------------------------------------------------------------
-    # 5.1.2 STOP MONITORING HELPER
-    # -----------------------------------------------------------------------------
+    # 5.1.2 Stop Monitoring Helper
 
+    # Stop monitoring and background activity
     def stop_monitoring(self):
         if self.recording:
             self.toggle_recording()
         if self.measuring:
             self.stop_measurement()
         self.monitoring = False
+        # Calibration is no longer active
         self.calibrating = False
         self.disable_lock(update_status=False)
         self.stop_stage_correction()
@@ -2021,12 +2098,11 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
 
-    # -----------------------------------------------------------------------------
-    # 5.6 READ STEP SIZE FROM THE UI
-    # -----------------------------------------------------------------------------
+    # 5.6 Read Step Size From The UI
 
+    # Read the step size from the UI
     def get_step_size(self):
-        #convert the user input from the UI into something readable for the program
+        # convert the user input from the UI into something readable for the program
         try:
             value = self.parse_entry_float(self.step_entry)
             value = abs(value)
@@ -2040,10 +2116,9 @@ class HomodyneGui:
             )
             return 0.0001 # safe default size when step size invalid
 
-    # -----------------------------------------------------------------------------
-    # 5.6.1 READ STAGE SPEED FROM THE UI
-    # -----------------------------------------------------------------------------
+    # 5.6.1 Read Stage Speed From The UI
 
+    # Read the stage speed from the UI
     def get_stage_speed(self):
         try:
             value = self.parse_entry_float(self.speed_entry)
@@ -2058,12 +2133,10 @@ class HomodyneGui:
             )
             return None
 
-    # -----------------------------------------------------------------------------
-    # 5.6.2 APPLY STAGE SPEED
-    # -----------------------------------------------------------------------------
+    # 5.6.2 Apply Stage Speed
 
+    # Apply the selected stage speed to the stage
     def apply_stage_speed(self, update_status=True):
-        self.append_recording_event("apply stage speed")
         speed_mm_s = self.get_stage_speed()
         if speed_mm_s is None:
             return False
@@ -2097,14 +2170,13 @@ class HomodyneGui:
             )
         return True
 
-    # -----------------------------------------------------------------------------
-    # 6.6 STAGE CONTROL HELPER
-    # -----------------------------------------------------------------------------
+    # 6.6 Stage Control Helper
 
+    # Check whether a stage move is allowed
     def prepare_stage_for_move(self):
         if self.lock_active:
             self.status.configure(
-                text="Stage-Bewegung blockiert: Lock ist aktiv.",
+                text="Stage movement blocked: lock is active",
                 text_color=RED_COLOR
             )
             return False
@@ -2130,10 +2202,9 @@ class HomodyneGui:
 
         return self.apply_stage_speed(update_status=False)
 
-    # -----------------------------------------------------------------------------
-    # 6.1 MOVE STAGE TO AN ABSOLUTE POSITION
-    # -----------------------------------------------------------------------------
+    # 6.1 Move Stage To An Absolute Position
 
+    # Start an absolute stage move
     def start_stage_move_to(self, target_mm, start_pos=None):
         if not self.prepare_stage_for_move():
             return
@@ -2144,7 +2215,9 @@ class HomodyneGui:
         target_mm = self.stage.clamp_position(target_mm)
         move_mm = target_mm - start_pos
 
+        # Store the start position of the movement
         self.stage_start_position = start_pos
+        # Store the distance traveled before this movement started
         self.stage_movement_before_move = self.total_stage_movement
         self.set_stage_target_position(target_mm, start_pos)
         self.reset_stage_speed_tracking(start_pos)
@@ -2175,10 +2248,9 @@ class HomodyneGui:
             daemon=True
         ).start()
 
-    # -----------------------------------------------------------------------------
-    # 6.2 MOVE STAGE BY A RELATIVE DISTANCE
-    # -----------------------------------------------------------------------------
+    # 6.2 Move Stage By A Relative Distance
 
+    # Start a relative stage move
     def start_stage_move_by(self, move_mm):
         if not self.stage_connected or self.stage is None:
             self.status.configure(
@@ -2190,16 +2262,16 @@ class HomodyneGui:
         start_pos = self.stage.get_position()
         self.start_stage_move_to(start_pos + move_mm, start_pos=start_pos)
 
-    # -----------------------------------------------------------------------------
-    # 6.3 MOVE STAGE TO TARGET IN STEPS
-    # -----------------------------------------------------------------------------
+    # 6.3 Move Stage To Target In Steps
 
+    # Start an absolute stepped move
     def start_stage_move_to_stepped(self, target_mm, step_mm=None, pause_s=STEP_PAUSE_S, label_prefix="Moving"):
         if not self.prepare_stage_for_move():
             return
 
         start_pos = self.stage.get_position()
-        target_mm = self.stage.clamp_position(target_mm) # clamps target distance by the maximum movement range of the stage
+        # Clamp the target to the allowed stage travel range
+        target_mm = self.stage.clamp_position(target_mm)
 
         if abs(target_mm - start_pos) < 1e-12:
             self.status.configure(
@@ -2208,7 +2280,9 @@ class HomodyneGui:
             )
             return
 
+        # Store the start position of the movement
         self.stage_start_position = start_pos
+        # Store the distance traveled before this movement started
         self.stage_movement_before_move = self.total_stage_movement
         self.set_stage_target_position(target_mm, start_pos)
         self.reset_stage_speed_tracking(start_pos)
@@ -2232,10 +2306,9 @@ class HomodyneGui:
             daemon=True
         ).start()
 
-    # -----------------------------------------------------------------------------
-    # 6.4 MOVE STAGE RELATIVELY IN STEPS
-    # -----------------------------------------------------------------------------
+    # 6.4 Move Stage Relatively In Steps
 
+    # Start a relative stepped move
     def start_stage_move_by_steps(self, move_mm, step_mm=None, pause_s=STEP_PAUSE_S, label_prefix="Moving"):
         if not self.stage_connected or self.stage is None:
             self.status.configure(
@@ -2252,10 +2325,9 @@ class HomodyneGui:
             label_prefix=label_prefix
         )
 
-    # -----------------------------------------------------------------------------
-    # 6.5 WORKER FOR STEPPED MOVEMENT
-    # -----------------------------------------------------------------------------
+    # 6.5 Worker For Stepped Movement
 
+    # Execute a stepped move in a worker thread
     def stage_stepped_move_worker(self, start_pos, target_mm, step_mm, pause_s, label_prefix):
         step_sign = 1 if target_mm > start_pos else -1
         current_pos = start_pos
@@ -2290,15 +2362,17 @@ class HomodyneGui:
             while self.stage.is_moving:
                 time.sleep(0.005 if pause_s <= 0 else 0.01)
 
-            step_distance = abs(next_target - current_pos) # how far did this step move
-            moved += step_distance # add this value to step distance
+            step_distance = abs(next_target - current_pos) # how far this step moved
+            moved += step_distance # add this value to the moved distance
             current_pos = next_target
             remaining = abs(target_mm - current_pos)
 
+            # Update the total distance traveled so far
             self.total_stage_movement = self.stage_movement_before_move + moved
             self.root.after(
                 0,
-                lambda p=current_pos, m=moved, b=self.stage_movement_before_move: # lambda=anonymous function because after expects a function that will be called later and not a function output
+                # Use a lambda because after() expects a callable to run later
+                lambda p=current_pos, m=moved, b=self.stage_movement_before_move:
                 self.update_stage_labels(p, m, b)
             )
 
@@ -2311,12 +2385,13 @@ class HomodyneGui:
             self.finish_stage_move(current_pos)
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.1 TRACK NORMAL STAGE MOVEMENT
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.1 Track Normal Stage Movement
+# -----------------------------------------------------------------------------
 
+    # Track the stage while it is moving
     def stage_ui_loop(self):
-        #how much did the stage move befor the current movement? use this as base
+        # use the distance traveled before the current movement as the base value
         movement_base = self.stage_movement_before_move
         while self.stage.is_moving:
             pos = self.stage.get_position()
@@ -2330,6 +2405,7 @@ class HomodyneGui:
 
         pos = self.stage.get_position()
         moved = abs(pos - self.stage_start_position)
+# total distance traveled so far
         self.total_stage_movement = movement_base + moved
         self.root.after(
             0,
@@ -2337,15 +2413,17 @@ class HomodyneGui:
             self.finish_stage_move(p)
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.1.1 FINISH STAGE MOVE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.1.1 Finish Stage Move
+# -----------------------------------------------------------------------------
 
+    # Finalize stage motion and update the UI
     def finish_stage_move(self, pos):
         moved = abs(pos - self.stage_start_position)
         self.update_stage_labels(pos, moved, self.stage_movement_before_move)
         self.clear_stage_target_position()
         self.label_stage_speed.configure(
+# Display of the current speed
             text="Movement Speed: 0.000000 mm/s"
         )
         self.status.configure(
@@ -2353,54 +2431,54 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
-    # -----------------------------------------------------------------------------
-    # 5.9 STAGE BUTTON ACTIONS
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9 Stage Button Actions
+# -----------------------------------------------------------------------------
 
+    # Move the stage to the minimum position
     def move_to_min(self):
-        self.append_recording_event("move to min")
         if self.stage is not None:
             self.start_stage_move_to(self.stage.min_position)
 
-    # -----------------------------------------------------------------------------
-    # 5.9.1 STEP NEGATIVE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.1 Step Negative
+# -----------------------------------------------------------------------------
 
+    # Move the stage one step in the negative direction
     def step_negative(self):
-        self.append_recording_event("step negative")
         self.start_stage_move_by(-self.get_step_size())
 
-    # -----------------------------------------------------------------------------
-    # 5.9.2 MOVE TO CENTER
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.2 Move To Center
+# -----------------------------------------------------------------------------
 
+    # Move the stage to the center
     def move_to_center(self):
-        self.append_recording_event("move to center")
         self.start_stage_move_to_stepped(0.0)
 
-    # -----------------------------------------------------------------------------
-    # 5.9.3 STEP POSITIVE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.3 Step Positive
+# -----------------------------------------------------------------------------
 
+    # Move the stage one step in the positive direction
     def step_positive(self):
-        self.append_recording_event("step positive")
         self.start_stage_move_by(self.get_step_size())
 
-    # -----------------------------------------------------------------------------
-    # 5.9.4 MOVE TO MAX
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.4 Move To Max
+# -----------------------------------------------------------------------------
 
+    # Move the stage to the maximum position
     def move_to_max(self):
-        self.append_recording_event("move to max")
         if self.stage is not None:
             self.start_stage_move_to(self.stage.max_position)
 
-    # -----------------------------------------------------------------------------
-    # 5.9.5 MOVE TO TARGET FROM UI
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.5 Move To Target From Ui
+# -----------------------------------------------------------------------------
 
+    # Move the stage to an absolute target from the UI
     def move_to_target(self):
-        self.append_recording_event("move to target")
         try:
             target_mm = self.parse_entry_float(self.target_entry)
             if target_mm < 0:
@@ -2413,12 +2491,12 @@ class HomodyneGui:
             return
         self.start_stage_move_to(target_mm)
 
-    # -----------------------------------------------------------------------------
-    # 5.9.6 MOVE DISTANCE FROM UI
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.6 Move Disance From Ui
+# -----------------------------------------------------------------------------
 
+    # Move the stage by a relative distance from the UI
     def move_distance(self):
-        self.append_recording_event("move distance")
         try:
             distance_mm = self.parse_entry_float(self.target_entry)
         except ValueError:
@@ -2429,12 +2507,12 @@ class HomodyneGui:
             return
         self.start_stage_move_by(distance_mm)
 
-    # -----------------------------------------------------------------------------
-    # 5.9.7 STOP STAGE ACTION
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 5.9.7 Stop Stage Action
+# -----------------------------------------------------------------------------
 
+    # Stop the stage immediately
     def stop_stage(self):
-        self.append_recording_event("stop stage")
         if self.stage_connected and self.stage is not None:
             self.stage.stop()
         self.root.after(
@@ -2446,15 +2524,16 @@ class HomodyneGui:
             )
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.2 SHOW INITIAL STAGE POSITION
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.2 Show Initial Stage Position
+# -----------------------------------------------------------------------------
 
-    #after calibration UI is filled with current stage position
+    # Show the current stage position once
     def update_stage_position_once(self):
         if self.stage_connected and self.stage is not None:
             pos = self.stage.get_position()
             self.stage_position_mm = pos
+# Reference position for calculations
             self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
@@ -2465,6 +2544,7 @@ class HomodyneGui:
                 text_color=ORANGE_COLOR
             )
 
+    # Periodically poll the stage status
     def poll_stage_status(self):
         try:
             if self.stage_connected and self.stage is not None:
@@ -2476,32 +2556,35 @@ class HomodyneGui:
                 self.update_still_to_drive_label(pos)
 
                 if self.stage.is_moving:
-                    moved = abs(pos - getattr(self, "stage_start_position", pos))
-                    movement_base = getattr(self, "stage_movement_before_move", self.total_stage_movement)
-                    self.update_stage_labels(pos, moved, movement_base)
                     self.update_stage_speed_label(pos)
+# Handle the else branch
                 elif self.stage_remaining_known and self.stage_remaining_to_drive <= 0:
                     self.label_stage_speed.configure(
+# Display of the current speed
                         text="Movement Speed: 0.000000 mm/s"
                     )
+# `finally` always runs in Python, even if an earlier error occurred
         finally:
             self.root.after(
                 STAGE_STATUS_POLL_MS,
                 self.poll_stage_status
             )
 
-    # -----------------------------------------------------------------------------
-    # 7.3 UPDATE STAGE MOVEMENT DISPLAY
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.3 Update Stage Movement Display
+# -----------------------------------------------------------------------------
 
+    # Update position, distance, and speed labels
     def update_stage_labels(self, pos, moved, movement_base=None):
         if movement_base is None:
             movement_base = self.total_stage_movement
         current_total_stage_movement = movement_base + abs(moved)
+# total distance traveled so far
         self.total_stage_movement = max(
             self.total_stage_movement,
             current_total_stage_movement
         )
+# Current comparison distance
         self.current_stage_movement_for_compare = current_total_stage_movement
 
         self.label_stage_position.configure(
@@ -2514,7 +2597,9 @@ class HomodyneGui:
         self.update_stage_speed_label(pos)
         self.update_comparison_labels(current_total_stage_movement)
 
+    # Store the active target position
     def set_stage_target_position(self, target_mm, current_pos=None):
+# Current target position
         self.stage_target_position = target_mm
         if current_pos is None:
             if self.stage_connected and self.stage is not None:
@@ -2523,33 +2608,44 @@ class HomodyneGui:
                 current_pos = target_mm
         self.update_still_to_drive_label(current_pos)
 
+    # Clear the active target position
     def clear_stage_target_position(self):
+# Current target position
         self.stage_target_position = None
+# Remaining distance to the target
         self.stage_remaining_to_drive = 0.0
+# Flag that indicates whether the remaining distance is known
         self.stage_remaining_known = True
         if hasattr(self, "label_still_to_drive"):
             self.label_still_to_drive.configure(
+# Display of the remaining distance
                 text="Still to drive: 0.000000 mm"
             )
 
+    # Update the remaining distance display
     def update_still_to_drive_label(self, pos=None):
         target_position = self.get_active_stage_target_position()
         if target_position is None:
+# Remaining distance to the target
             self.stage_remaining_to_drive = 0.0
+# Flag that indicates whether the remaining distance is known
             self.stage_remaining_known = (
                 not self.stage_connected
                 or self.stage is None
                 or not self.stage.is_moving
             )
         else:
+# Flag that indicates whether the remaining distance is known
             self.stage_remaining_known = True
             if pos is None:
                 if self.stage_connected and self.stage is not None:
                     pos = self.stage.get_position()
                 else:
                     pos = target_position
+# Remaining distance to the target
             self.stage_remaining_to_drive = abs(target_position - pos)
             if self.stage_remaining_to_drive < 1e-6:
+# Remaining distance to the target
                 self.stage_remaining_to_drive = 0.0
 
         if hasattr(self, "label_still_to_drive"):
@@ -2559,23 +2655,28 @@ class HomodyneGui:
                 label_text = "Still to drive: target unknown"
             self.label_still_to_drive.configure(text=label_text)
 
+    # Return the current active target position
     def get_active_stage_target_position(self):
         if self.stage_target_position is not None:
             return self.stage_target_position
         return None
 
-    # -----------------------------------------------------------------------------
-    # 7.5 RESET STAGE SPEED TRACKING
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.5 Reset Stage Speed Tracking
+# -----------------------------------------------------------------------------
 
+    # Reset the speed measurement reference
     def reset_stage_speed_tracking(self, pos):
+# Position reference for speed measurement
         self.last_stage_speed_position = pos
+# Time reference for speed measurement
         self.last_stage_speed_time = time.time()
 
-    # -----------------------------------------------------------------------------
-    # 7.6 UPDATE STAGE SPEED DISPLAY
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.6 Update Stage Speed Display
+# -----------------------------------------------------------------------------
 
+    # Compute and show the current stage speed
     def update_stage_speed_label(self, pos):
         now = time.time()
         if self.last_stage_speed_time is None or self.last_stage_speed_position is None:
@@ -2587,43 +2688,55 @@ class HomodyneGui:
             return
 
         speed_mm_s = abs(pos - self.last_stage_speed_position) / dt
+# Time reference for speed measurement
         self.last_stage_speed_time = now
+# Position reference for speed measurement
         self.last_stage_speed_position = pos
         self.label_stage_speed.configure(
             text=f"Movement Speed: {speed_mm_s:.6f} mm/s"
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.4 RESET STAGE MOVEMENT TRACKING
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.4 Reset Stage Movement Tracking
+# -----------------------------------------------------------------------------
 
+    # Reset all stage movement tracking values
     def reset_stage_movement_tracking(self, pos=None):
+# total distance traveled so far
         self.total_stage_movement = 0.0
+# Distance traveled before the current movement
         self.stage_movement_before_move = 0.0
+# Current comparison distance
         self.current_stage_movement_for_compare = 0.0
+# Current target position
         self.stage_target_position = None
+# Remaining distance to the target
         self.stage_remaining_to_drive = 0.0
+# Flag that indicates whether the remaining distance is known
         self.stage_remaining_known = True
 
         if pos is not None: # use provided position as new reference
+# Reference position for calculations
             self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
+# Handle the else branch
         elif self.stage_connected and self.stage is not None:
             self.stage_reference_position = self.stage.get_position()
         else:
+# Reference position for calculations
             self.stage_reference_position = 0.0
 
         self.label_stage_moved.configure(text="Accumulated Movement: 0.000000 mm")
         self.label_stage_speed.configure(text="Movement Speed: 0.000000 mm/s")
         self.clear_stage_target_position()
 
-    # -----------------------------------------------------------------------------
-    # 7.11 UPDATE DRIVEN VS CALCULATED DISTANCE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.11 Update Driven vs Calculated Distance
+# -----------------------------------------------------------------------------
 
-    #stage movement distance is compared with distance calculated from counted fringes
+    # Update driven vs calculated distance displays
     def update_comparison_labels(self, driven_mm=None):
         if not self.measuring or self.calibrating:
             self.label_compare_driven.configure(text="Driven: 0.000000 mm")
@@ -2642,9 +2755,10 @@ class HomodyneGui:
 
         driven_distance_mm = abs(driven_mm)
         calculated_mm = 0.0
-        if self.monitor is not None and self.monitor.single_counter is not None:
-            fringe_count = self.monitor.single_counter.accumulated_fringes
-            calculated_mm = abs(fringe_count * self.fringe_distance_mm)
+        if self.monitor is not None and self.monitor.counter is not None:
+            dist = self.monitor.counter.signed_distance_mm()
+            if dist is not None:
+                calculated_mm = abs(dist)
 
         difference_mm = driven_distance_mm - calculated_mm
         self.label_compare_driven.configure(
@@ -2657,10 +2771,11 @@ class HomodyneGui:
             text=f"Difference: {difference_mm:.6f} mm"
         )
 
-    # -----------------------------------------------------------------------------
-    # 8.8 RUN STAGE MOTION BY PARAMETERS
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 8.8 Run Stage Motion By Parameters
+# -----------------------------------------------------------------------------
 
+    # Execute movement based on selected mode and parameters
     def run_stage_motion_by_parameters(self):
         if not self.stage_connected or self.stage is None:
             return
@@ -2670,7 +2785,9 @@ class HomodyneGui:
             self.stage.set_velocity(VELOCITY_MM_S)
             final_target = self.stage.clamp_position(current_position + TOTAL_DISTANCE_MM)
 
+# start position of the movement
             self.stage_start_position = current_position
+# Distance traveled before the current movement
             self.stage_movement_before_move = self.total_stage_movement
             self.set_stage_target_position(final_target, current_position)
             self.reset_stage_speed_tracking(current_position)
@@ -2708,6 +2825,7 @@ class HomodyneGui:
 
             pos = self.stage.get_position()
             moved = abs(pos - self.stage_start_position)
+# total distance traveled so far
             self.total_stage_movement = self.stage_movement_before_move + moved
             self.root.after(
                 0,
@@ -2717,7 +2835,9 @@ class HomodyneGui:
         else:
             self.stage.set_velocity(VELOCITY_MM_S_STEPPED)
 
+# start position of the movement
             self.stage_start_position = current_position
+# Distance traveled before the current movement
             self.stage_movement_before_move = self.total_stage_movement
             stepped_target = self.stage.clamp_position(
                 current_position + STEP_SIZE_MM * STEPS
@@ -2737,6 +2857,7 @@ class HomodyneGui:
             current_pos = current_position
             moved = 0.0
 
+# Iterate over the sequence sample by sample
             for step in range(STEPS):
                 if not self.monitoring:
                     break
@@ -2769,6 +2890,7 @@ class HomodyneGui:
                 moved += step_distance
                 current_pos = next_position
 
+# total distance traveled so far
                 self.total_stage_movement = self.stage_movement_before_move + moved
                 self.root.after(
                     0,
@@ -2785,17 +2907,18 @@ class HomodyneGui:
                 self.finish_stage_move(p)
             )
 
-    # -----------------------------------------------------------------------------
-    # 7.7 MOVE STAGE DURING CALIBRATION
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.7 Move Stage During Calibration
+# -----------------------------------------------------------------------------
 
+    # Run the calibration movement pattern
     def calibration_stage_motion(self):
         previous_velocity = None
         try:
             if not self.stage_connected or self.stage is None:
                 return
 
-            start_pos = self.stage.get_position() # current stage position as movement start
+            start_pos = self.stage.get_position() # current stage position as the movement start
             forward_target = self.stage.clamp_position(start_pos + CALIBRATION_STAGE_DISTANCE_MM)
             back_target = self.stage.clamp_position(start_pos)
             sweep_distance_mm = abs(forward_target - start_pos)
@@ -2809,7 +2932,9 @@ class HomodyneGui:
             if not self.stage.set_velocity(calibration_speed_mm_s):
                 return
 
+# start position of the movement
             self.stage_start_position = start_pos
+# Distance traveled before the current movement
             self.stage_movement_before_move = 0.0
             self.reset_stage_speed_tracking(start_pos)
 
@@ -2825,12 +2950,15 @@ class HomodyneGui:
             accumulated_movement_mm = 0.0
 
             while self.monitoring and self.calibrating:
+# Iterate over the sequence sample by sample
                 for target in (forward_target, back_target):
                     if not self.monitoring or not self.calibrating:
                         return
 
                     leg_start_pos = self.stage.get_position()
+# Current target position
                     self.stage_target_position = target
+# Flag that indicates whether the remaining distance is known
                     self.stage_remaining_known = True
 
                     if not self.stage.move_absolute(target):
@@ -2851,7 +2979,9 @@ class HomodyneGui:
 
                     current_pos = self.stage.get_position()
                     accumulated_movement_mm += abs(current_pos - leg_start_pos)
+# total distance traveled so far
                     self.total_stage_movement = accumulated_movement_mm
+# Current comparison distance
                     self.current_stage_movement_for_compare = accumulated_movement_mm
 
                     self.root.after(
@@ -2860,6 +2990,7 @@ class HomodyneGui:
                         self.update_stage_labels(p, m, 0.0)
                     )
 
+# `finally` always runs in Python, even if an earlier error occurred
         finally:
             if self.stage_connected and self.stage is not None and self.stage.is_moving:
                 self.stage.stop()
@@ -2874,6 +3005,7 @@ class HomodyneGui:
                 self.finish_calibration_movement(p, m)
             )
 
+    # Stop calibration movement
     def stop_calibration_stage_motion(self):
         if not self.stage_connected or self.stage is None:
             return
@@ -2889,10 +3021,11 @@ class HomodyneGui:
             )
         )
 
-    # -----------------------------------------------------------------------------
-    # 7.10 FINISH CALIBRATION RESET
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.10 Finish Calibration Reset
+# -----------------------------------------------------------------------------
 
+    # Finalize calibration movement and update the UI
     def finish_calibration_movement(self, pos=None, accumulated_movement_mm=None):
         if self.stage_connected and self.stage is not None and self.stage.is_moving:
             self.stage.stop()
@@ -2915,8 +3048,11 @@ class HomodyneGui:
         if accumulated_movement_mm is None:
             self.reset_stage_movement_tracking(pos)
         else:
+# Reference position for calculations
             self.stage_reference_position = pos
+# total distance traveled so far
             self.total_stage_movement = accumulated_movement_mm
+# Current comparison distance
             self.current_stage_movement_for_compare = accumulated_movement_mm
 
             self.label_stage_position.configure(
@@ -2940,10 +3076,12 @@ class HomodyneGui:
                 text_color=GREEN_COLOR
             )
 
+    # Schedule the UI update loop
     def start_ui_loop(self):
 
         self.root.after(int(UI_UPDATE_INTERVAL_S * 1000), self.update_ui_loop)
 
+    # Update all live UI elements
     def update_ui_loop(self):
         if not self.monitoring and not self.calibrating:
             return
@@ -2953,6 +3091,7 @@ class HomodyneGui:
             text_color=ORANGE_COLOR
         )
 
+# Copy the shared data while holding the lock
         with self.sample_display_lock:
             sample = self.latest_sample
             distance_mm = self.latest_distance_mm
@@ -2976,6 +3115,7 @@ class HomodyneGui:
             if progress_text:
                 self.status.configure(text=progress_text, text_color=ORANGE_COLOR)
             self.update_plot()
+# Handle the else branch
         elif sample is not None:
 
             self.label_single_fringes.configure(
@@ -3021,13 +3161,16 @@ class HomodyneGui:
                 dir_text = "Forward →"
                 dir_color = GREEN_COLOR
                 lissajous_dir_text = "FORWARD"
+# Handle the else branch
             elif sample.direction == "backward":
                 dir_text = "Backward ←"
                 dir_color = RED_COLOR
                 lissajous_dir_text = "BACKWARD"
+# Handle the else branch
             elif sample.direction == "signal_low":
                 dir_text = "Signal Low"
                 dir_color = RED_COLOR
+# Handle the else branch
             elif sample.direction == "fringes_not_visible":
                 dir_text = "Fringes Not Visible"
                 dir_color = RED_COLOR
@@ -3041,15 +3184,13 @@ class HomodyneGui:
                 text_color=dir_color
             )
 
-            display_distance_mm = single_distance
-
-            if display_distance_mm is None:
+            if distance_mm is None:
                 self.label_distance.configure(
-                    text="distance_mm = S1 Calculated Distance = n/a"
+                    text="distance_mm = fringe_position * fringe_distance_mm = n/a"
                 )
             else:
                 self.label_distance.configure(
-                    text=f"distance_mm = S1 Calculated Distance = {display_distance_mm:+.9f} mm"
+                    text=f"distance_mm = fringe_position * fringe_distance_mm = {distance_mm:+.9f} mm"
                 )
 
             if sample.fringe_delta != 0:
@@ -3084,6 +3225,7 @@ class HomodyneGui:
 
         self.root.after(int(UI_UPDATE_INTERVAL_S * 1000), self.update_ui_loop)
 
+    # Read hardware, calibrate, filter, count, and store samples
     def measurement_loop(self):
         try:
             self.monitor.connect()
@@ -3117,6 +3259,7 @@ class HomodyneGui:
                     if len(self.baseline_samples) >= 200:
                         self.baseline_s1 = sum(s[0] for s in self.baseline_samples) / len(self.baseline_samples)
                         self.baseline_s2 = sum(s[1] for s in self.baseline_samples) / len(self.baseline_samples)
+# Remember whether the baseline has already been measured
                         self.baseline_recorded = True
                         self.root.after(
                             0,
@@ -3137,6 +3280,7 @@ class HomodyneGui:
                     self.lp_clean_s1 = alpha * clean_s1 + (1.0 - alpha) * self.lp_clean_s1
                     self.lp_clean_s2 = alpha * clean_s2 + (1.0 - alpha) * self.lp_clean_s2
 
+# Copy the shared data while holding the lock
                 with self.sample_display_lock:
                     self.raw_s1_history.append(raw_s1)
                     self.raw_s2_history.append(raw_s2)
@@ -3184,6 +3328,7 @@ class HomodyneGui:
                             if self.stage_connected and self.stage is not None:
                                 self.stage_measurement_start_position = self.stage.get_position()
 
+# flag that indicates whether calibration is currently running
                             self.calibrating = False
                             calibration_start_time = None
                             self.stop_calibration_stage_motion()
@@ -3200,22 +3345,20 @@ class HomodyneGui:
                         sample = self.monitor.counter.update(self.lp_clean_s1, self.lp_clean_s2)
                         distance_mm = self.monitor.counter.signed_distance_mm()
 
+# Copy the shared data while holding the lock
                         with self.sample_display_lock:
+# Clear the most recent sample cache
                             self.latest_sample = sample
                             self.latest_distance_mm = distance_mm
 
                 if self.recording:
-                    self.recording_sample_counter += 1
-                    if self.recording_sample_counter % self.recording_sample_stride != 0:
-                        time.sleep(SAMPLE_INTERVAL_S)
-                        continue
                     elapsed = time.time() - self.recording_start_time
                     # Non-blocking read of the last queried stage position
                     stage_pos = self.stage.current_position if (self.stage_connected and self.stage is not None) else 0.0
                     s_obj = sample if ('sample' in locals() and sample is not None) else None
                     cur_single_fringes = self.monitor.single_counter.accumulated_fringes if self.monitor else 0
                     cur_single_distance = cur_single_fringes * self.fringe_distance_mm
-                    cur_phase_distance = cur_single_distance
+                    cur_phase_distance = distance_mm if ('distance_mm' in locals() and distance_mm is not None) else 0.0
                     self.recorded_data.append((
                         elapsed,
                         raw_s1,
@@ -3233,6 +3376,7 @@ class HomodyneGui:
                 time.sleep(SAMPLE_INTERVAL_S)
 
         except Exception as error:
+# last error message
             self.last_error_text = str(error)
             self.root.after(
                 0,
@@ -3240,8 +3384,10 @@ class HomodyneGui:
                 self.show_error(e)
             )
 
+# `finally` always runs in Python, even if an earlier error occurred
         finally:
             self.monitoring = False
+# flag that indicates whether calibration is currently running
             self.calibrating = False
             self.stop_calibration_stage_motion()
             try:
@@ -3250,12 +3396,14 @@ class HomodyneGui:
                 pass
             self.root.after(0, self.finish_stopped_ui)
 
-    # -----------------------------------------------------------------------------
-    # 7.8 HANDLE CALIBRATION SAMPLE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 7.8 Handle Calibration Sample
+# -----------------------------------------------------------------------------
 
+    # Store one calibration sample
     def handle_calibration_sample(self, raw_sample, elapsed_s, total_s):
         raw_s1, raw_s2 = raw_sample
+# Copy the shared data while holding the lock
         with self.sample_display_lock:
             self.calibration_raw_samples.append(raw_sample)
             self.raw_s1_history.append(raw_s1)
@@ -3265,48 +3413,62 @@ class HomodyneGui:
                 self.raw_s2_history.pop(0)
             self.calibration_progress_text = f"Status: calibrating {elapsed_s:.1f}/{total_s:.1f}s..."
 
+    # Reset the calculation-related labels
     def reset_calculation_display(self):
+        # Reset the single-signal fringe counter text to zero
         self.label_single_fringes.configure(text="S1 Fringe Count: 0")
+        # Reset the calculated distance text to zero
         self.label_single_distance.configure(text="S1 Calculated Distance: 0.000000 mm")
+        # Reset the amplitude summary so no calibration value is shown
         self.label_single_thresholds.configure(text="Signal amplitudes: S1 = n/a, S2 = n/a")
 
+        # Reset the phase readout to an unavailable state
         self.label_phase.configure(
             text="phase_rad = atan2(S2_norm, S1_norm) = n/a"
         )
+        # Reset the normalized S1 readout
         self.label_s1_norm.configure(
             text="S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a"
         )
+        # Reset the normalized S2 readout
         self.label_s2_norm.configure(
             text="S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a"
         )
+        # Reset the unwrapped phase readout
         self.label_unwrapped_phase.configure(
             text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad"
         )
+        # Reset the fringe position readout
         self.label_fringe_position.configure(
             text="fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000"
         )
+        # Reset the signed fringe counter text
         self.label_fringes.configure(
             text="signed_fringes = 0"
         )
+        # Reset the direction label to the neutral state
         self.label_direction.configure(
             text="Direction: Still"
         )
+        # Reset the Lissajous direction label to still
         self.label_lissajous_direction.configure(
             text="STILL",
             text_color=ORANGE_COLOR
         )
+        # Reset the calculated distance display
         self.label_distance.configure(
             text="distance_mm = fringe_position * fringe_distance_mm = n/a"
         )
 
+    # Start or stop the lock
     def toggle_lock(self):
-        self.append_recording_event("toggle lock")
-        #get all errors
+        # Handle the current lock state first
         if self.lock_active:
-            #refuse manual step movement because lock is active
+            # Refuse manual stage moves while the lock is active
             self.disable_lock()
             return
 
+        # Require monitoring before the lock can be enabled
         if not self.monitoring:
             self.status.configure(
                 text="Status: start monitoring before lock",
@@ -3314,6 +3476,7 @@ class HomodyneGui:
             )
             return
 
+        # Refuse locking while a stage command or correction is active
         if (
             self.stage_command_active
             or self.lock_correction_active
@@ -3329,6 +3492,7 @@ class HomodyneGui:
             )
             return
 
+        # Refuse locking when the stage connection is missing
         if not self.stage_connected:
             self.status.configure(
                 text="Status: stage not connected, cannot lock",
@@ -3336,10 +3500,11 @@ class HomodyneGui:
             )
             return
 
-        # Check if we have a calibrated fringe amplitude
+        # Check whether a calibrated fringe amplitude is already available
         if self.monitor is not None and self.monitor.single_counter is not None:
+            # Ask the user for a fallback fringe amplitude when no calibration exists
             if not self.monitor.single_counter.fringes_visible:
-                # Prompt the user for the default fringe amplitude (V)
+                # Ask the user for the fallback fringe amplitude in volts
                 val = sd.askfloat(
                     "Default Fringe Amplitude",
                     "No calibrated fringe value found.\n\nPlease enter the default fringe amplitude in Volts (e.g. 0.010):",
@@ -3348,11 +3513,12 @@ class HomodyneGui:
                     minvalue=0.0001,
                     maxvalue=2.0
                 )
+                # Abort if the user cancels the dialog
                 if val is None:
-                    # User cancelled the dialog, abort locking
+                    # Abort locking if the dialog was cancelled
                     return
                 
-                # Configure counters with this default value
+                # Store the fallback amplitude in both counters
                 self.monitor.single_counter.fringe_amplitude_voltage = val
                 self.monitor.single_counter.fringes_visible = True
                 
@@ -3361,112 +3527,152 @@ class HomodyneGui:
                 
                 self.monitor.counter.set_signal_visibility(True, True)
 
-            # In all cases (either reusing the last calibration or setting the default value),
-            # enforce the strict 98% rise/rearm thresholds:
+            # Enforce the 98 percent rise and rearm thresholds in every case
+            # Read the S1 fringe amplitude for the threshold update
             amp = self.monitor.single_counter.fringe_amplitude_voltage
+            # Set the S1 rise threshold close to the detected amplitude
             self.monitor.single_counter.fringe_rise_threshold_voltage = amp * 0.98
+            # Set the S1 rearm threshold to the same level
             self.monitor.single_counter.fringe_rearm_threshold_voltage = amp * 0.98
 
+            # Read the S2 fringe amplitude for the threshold update
             amp_s2 = self.monitor.s2_visibility_counter.fringe_amplitude_voltage
+            # Set the S2 rise threshold close to the detected amplitude
             self.monitor.s2_visibility_counter.fringe_rise_threshold_voltage = amp_s2 * 0.98
+            # Set the S2 rearm threshold to the same level
             self.monitor.s2_visibility_counter.fringe_rearm_threshold_voltage = amp_s2 * 0.98
 
-        # Keep stage stationary
+        # Keep the stage stationary before starting lock mode
         if self.stage_connected and self.stage is not None:
+            # Stop the stage so the lock begins from a fixed position
             self.stage.stop()
+            # Remember the exact stage position where the lock started
             self.lock_stage_position_mm = self.stage.get_position()
         else:
+            # Fall back to zero when no stage position is available
             self.lock_stage_position_mm = 0.0
 
-        # Reset counters so locking starts at exactly 0
+        # Reset the counters so lock mode starts at zero
         if self.monitor is not None:
+            # Reset the combined fringe counter
             self.monitor.counter.reset()
+            # Reset the S1 fringe counter
             self.monitor.single_counter.reset()
+            # Reset the S2 visibility counter
             self.monitor.s2_visibility_counter.reset()
 
+        # Mark the lock as active
         self.lock_active = True
+        # Clear the stored lock distance reference
         self.lock_reference_distance_mm = 0.0
+        # Clear the stored lock phase reference
         self.lock_reference_phase_rad = 0.0
+        # Clear the stored lock fringe reference
         self.lock_reference_fringes = 0
+# Clear the most recent sample and distance cache
+        # Forget the most recent sample so the lock starts cleanly
         self.latest_sample = None
+        # Forget the most recent distance so the lock starts cleanly
         self.latest_distance_mm = 0.0
+        # Clear the single-signal fringe reference used by the lock
         self.lock_ref_single_fringes = 0
 
+        # Switch the main lock button into the unlock state
         self.btn_lock.configure(
             text="UNLOCK",
             fg_color=GREEN_COLOR
         )
         if hasattr(self, 'btn_lock_box'):
+            # Switch the secondary lock button into the unlock state
             self.btn_lock_box.configure(
                 text="UNLOCK",
                 fg_color=GREEN_COLOR
             )
         if hasattr(self, 'label_lock_status_box'):
+            # Update the small lock status box to active
             self.label_lock_status_box.configure(
                 text="Lock Status: active",
                 text_color=GREEN_COLOR
             )
+        # Update the main lock label to show that locking is enabled
         self.label_lock_status.configure(
             text="Lock: on",
             text_color=GREEN_COLOR
         )
+        # Update the general status line to show the lock state
         self.status.configure(
             text="Status: locked",
             text_color=GREEN_COLOR
         )
 
-    #return everything to unlock state
+    # Return the UI and internal state to unlocked mode
     def disable_lock(self, update_status=True):
-        self.append_recording_event("disable lock")
+        # Stop any active correction before clearing the lock state
         self.stop_stage_correction()
-        self.lock_active = False # disable position lock
+        # Mark the lock as inactive
+        self.lock_active = False
+        # Reset the main lock button text
         self.btn_lock.configure(
             text="LOCK",
             fg_color=TEXT_COLOR
         )
         if hasattr(self, 'btn_lock_box'):
+            # Reset the secondary lock button text
             self.btn_lock_box.configure(
                 text="LOCK",
                 fg_color=TEXT_COLOR
             )
+            # Reset the small lock status box
             self.label_lock_status_box.configure(
                 text="Lock Status: off",
                 text_color=TEXT_COLOR
             )
+            # Clear the fringe counter since locking
             self.label_fringes_since_locking.configure(
                 text="Fringes since locking: n/a"
             )
+            # Clear the correction text since locking
             self.label_correction_since_locking.configure(
                 text="Correction since locking: n/a"
             )
+        # Reset the main lock label
         self.label_lock_status.configure(
             text="Lock: off",
             text_color=TEXT_COLOR
         )
+        # Reset the stored lock reference label
         self.label_lock_reference.configure(
             text="Reference: n/a"
         )
+        # Reset the drift label
         self.label_lock_drift.configure(
             text="Drift: n/a"
         )
+        # Reset the correction label
         self.label_lock_correction.configure(
             text="Correction to lock: n/a",
             text_color=TEXT_COLOR
         )
 
+        # Update the status line only when requested
         if update_status:
             self.status.configure(
                 text="Status: lock off",
                 text_color=TEXT_COLOR
             )
 
+    # Show drift and correction information
     def update_lock_display(self, sample, distance_mm):
+        # Skip the update when the lock is inactive or the sample is missing
         if not self.lock_active or distance_mm is None or sample is None:
             return
 
+        # Compute the drift relative to the lock reference distance
         drift_mm = distance_mm - self.lock_reference_distance_mm
+        # Convert the drift into the corrective movement sign
         correction_mm = -STAGE_CORRECTION_SIGN * drift_mm
 
+        # Update the stored reference distance and fringe count
         self.label_lock_reference.configure(
             text=(
                 f"Reference: "
@@ -3474,9 +3680,11 @@ class HomodyneGui:
                 f"{self.lock_reference_fringes:+d} fringes"
             )
         )
+        # Show the measured drift in millimeters
         self.label_lock_drift.configure(
             text=f"Drift: {drift_mm:+.9f} mm"
         )
+        # Show the calculated correction direction and size
         self.label_lock_correction.configure(
             text=(
                 f"Correction to lock: {correction_mm:+.9f} mm "
@@ -3485,20 +3693,25 @@ class HomodyneGui:
             text_color=ORANGE_COLOR if abs(drift_mm) > 0 else GREEN_COLOR
         )
 
+        # Hand the values to the lock correction decision logic
         self.maybe_start_lock_correction(drift_mm, correction_mm, sample)
 
-    #extremely small drift is ignored
+    # Compute the deadband for lock activation
     def lock_deadband_mm(self):
+        # Read the fringe distance from the calibrated counter
         fringe_distance_mm = self.monitor.counter.fringe_distance_mm
 
+        # Return a tiny fallback deadband when no calibration exists
         if fringe_distance_mm is None:
             return 1e-7
 
+        # Use the larger value of fringe-based deadband or minimum fallback
         return max(
             abs(fringe_distance_mm) * LOCK_TRIGGER_FRINGES,
             1e-7
         )
 
+    # Decide whether a lock correction should start
     def maybe_start_lock_correction(self, drift_mm, correction_mm, sample):
         if not self.lock_active:
             return
@@ -3524,7 +3737,7 @@ class HomodyneGui:
 
         fringes_str = f"+{sample.signed_fringes}" if sample.signed_fringes > 0 else f"{sample.signed_fringes}"
 
-        # 1. Check if deviation is below threshold
+        # 1  Ignore deviations that are too small to matter
         if abs(sample.signed_fringes) < LOCK_TRIGGER_FRINGES:
             msg = f"{fringes_str} fringe, but below threshold so didnt count"
             if hasattr(self, 'label_lock_status_box'):
@@ -3534,7 +3747,7 @@ class HomodyneGui:
                 )
             return
 
-        # 2. Check invalid direction
+        # 2  Ignore samples without a usable movement direction
         if sample.direction not in ["forward", "backward"]:
             msg = f"{fringes_str} fringe but still, so no correction"
             self.label_lock_status.configure(
@@ -3548,7 +3761,7 @@ class HomodyneGui:
                 )
             return
 
-        # 3. Check busy state
+        # 3  Do not start a correction while another stage action is active
         if (
             self.lock_correction_active
             or self.stage_command_active
@@ -3562,7 +3775,7 @@ class HomodyneGui:
                 )
             return
 
-        # 4. Check cooldown
+        # 4  Enforce the correction cooldown so the stage is not spammed
         now = time.time()
         if now - self.lock_last_correction_time < LOCK_CORRECTION_COOLDOWN_S:
             msg = f"{fringes_str} fringe but still, so no correction"
@@ -3573,19 +3786,19 @@ class HomodyneGui:
                 )
             return
 
-        # Determine the corrective step (opposite to the drift to apply true negative feedback)
-        # Drift (+) -> correction (-)
-        # Drift (-) -> correction (+)
+        # Convert the drift into a correction in the opposite direction
+        # Positive drift needs a negative correction
+        # Negative drift needs a positive correction
         correction_step_mm = - (sample.signed_fringes * fringe_distance_mm)
         
-        # Clamp the correction step to a maximum of 2 fringes (0.0008 mm) from the lock position
+        # Limit the correction to two fringes away from the lock position
         max_lock_deviation_mm = 0.0008
         if correction_step_mm > max_lock_deviation_mm:
             correction_step_mm = max_lock_deviation_mm
         elif correction_step_mm < -max_lock_deviation_mm:
             correction_step_mm = -max_lock_deviation_mm
         
-        # Calculate target relative to the saved lock position reference (not current_position_mm)
+        # Calculate the target from the saved lock reference, not the current stage position
         target_position_mm = self.stage.clamp_position(
             self.lock_stage_position_mm + correction_step_mm
         )
@@ -3620,7 +3833,7 @@ class HomodyneGui:
                 )
             return
 
-        # Success message format: "+1 fringe corrected by -0.000316 mm"
+        # Format the success message for the UI
         msg = f"{fringes_str} fringe corrected by {correction_step_mm:+.6f} mm"
 
         self.label_lock_status.configure(
@@ -3645,6 +3858,7 @@ class HomodyneGui:
             daemon=True
         ).start()
 
+    # Monitor an active lock correction move
     def lock_correction_worker(self):
         while (
             self.lock_correction_active
@@ -3674,6 +3888,7 @@ class HomodyneGui:
             self.finish_lock_correction(p)
         )
 
+    # End the lock correction and reset transient state
     def finish_lock_correction(self, position_mm):
         self.lock_correction_active = False
         self.lock_last_correction_time = time.time()
@@ -3687,7 +3902,7 @@ class HomodyneGui:
         if not self.lock_active:
             return
 
-        # Reset counters to clear any transient/aliased counts during the movement
+        # Reset counters to clear transient counts caused by the movement
         if self.monitor is not None:
             self.monitor.counter.reset()
             self.monitor.single_counter.reset()
@@ -3702,6 +3917,7 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
+    # Stop an active correction move
     def stop_stage_correction(self):
         was_correcting = self.lock_correction_active
         self.lock_correction_active = False
@@ -3709,26 +3925,29 @@ class HomodyneGui:
         if was_correcting and self.stage_connected and self.stage is not None:
             self.stage.stop()
 
-    # -----------------------------------------------------------------------------
-    # 8.6 SHOW MONITORING ERROR
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 8.6 Show Monitoring Error
+# -----------------------------------------------------------------------------
 
+    # Display an error in the status label
     def show_error(self, error):
         self.status.configure(
             text=f"Status: {error}",
             text_color=RED_COLOR
         )
 
-    # -----------------------------------------------------------------------------
-    # 8.7 RESET UI AFTER MONITORING STOPS
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 8.7 Reset UI After Monitoring Stops
+# -----------------------------------------------------------------------------
 
+    # Restore the UI after monitoring stops
     def finish_stopped_ui(self):
         if self.recording:
             self.toggle_recording()
         if self.measuring:
             self.stop_measurement()
         self.btn_start.configure(
+            # Button text after monitoring has stopped
             text="START MONITORING",
             fg_color=TEXT_COLOR
         )
@@ -3745,11 +3964,12 @@ class HomodyneGui:
                 text_color=TEXT_COLOR
             )
 
+    # Reset the monitoring state and UI
     def reset_monitor(self):
-        self.append_recording_event("reset monitor")
         self.monitor.counter.reset()
         self.monitor.single_counter.reset()
         self.monitor.s2_visibility_counter.reset()
+        # Clear the most recent sample and distance cache
         self.latest_sample = None
         self.latest_distance_mm = None
         self.raw_s1_history = []
@@ -3759,11 +3979,13 @@ class HomodyneGui:
         self.baseline_samples = []
         self.baseline_s1 = 0.0
         self.baseline_s2 = 0.0
+        # Remember that the baseline has not been measured yet
         self.baseline_recorded = False
         if hasattr(self, 'lp_clean_s1'):
             del self.lp_clean_s1
         if hasattr(self, 'lp_clean_s2'):
             del self.lp_clean_s2
+        # Clear the pending display queue under the lock
         with self.sample_display_lock:
             self.pending_sample = None
             self.pending_distance_mm = None
@@ -3783,10 +4005,11 @@ class HomodyneGui:
                 text_color=TEXT_COLOR
             )
 
-    # -----------------------------------------------------------------------------
-    # 8.5 LIVE VOLTAGE PLOT UPDATE
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 8.5 Live Voltage Plot Update
+# -----------------------------------------------------------------------------
 
+    # Update or clear the plots
     def update_plot(self, reset=False):
         if self.plot_axes is None or self.axis_circle is None:
             return
@@ -3796,6 +4019,10 @@ class HomodyneGui:
             self.plot_lines['S2_raw'].set_data([], [])
             self.plot_lines['S1_raw_clean'].set_data([], [])
             self.plot_lines['S2_raw_clean'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3804,12 +4031,15 @@ class HomodyneGui:
             self.plot_canvas_circle.draw_idle()
             return
 
+        # Copy the latest raw histories under the lock
         with self.sample_display_lock:
             s1_hist = list(self.raw_s1_history)
             s2_hist = list(self.raw_s2_history)
 
         self.update_plot_data(s1_hist, s2_hist)
 
+
+    # Redraw the raw and fitted signal data
     def update_plot_data(self, s1_hist, s2_hist):
         if self.plot_axes is None or self.axis_circle is None:
             return
@@ -3836,16 +4066,30 @@ class HomodyneGui:
         if x:
             self.plot_axes['S2_raw'].set_xlim(0, max(PLOT_SAMPLE_WINDOW - 1, len(x) - 1))
 
+        if not (self.measuring or self.lock_active):
+            self.plot_lines['circle_trace'].set_data([], [])
+            self.plot_lines['circle_current'].set_data([], [])
+            self.plot_lines['circle_pointer'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_data([], [])
+            self.plot_lines['S2_raw_fit'].set_data([], [])
+            self.plot_lines['S1_raw_fit'].set_visible(False)
+            self.plot_lines['S2_raw_fit'].set_visible(False)
+            self.plot_quiver.set_visible(False)
+            self.plot_canvas.draw_idle()
+            self.plot_canvas_circle.draw_idle()
+            return
+
         s1_norm_history = []
         s2_norm_history = []
+        # Read the current calibration values under the counter lock
         with self.monitor.counter.lock:
             offset_s1 = self.monitor.counter.offset_s1
             scale_s1 = self.monitor.counter.scale_s1
             offset_s2 = self.monitor.counter.offset_s2
             scale_s2 = self.monitor.counter.scale_s2
 
-        # If offsets/scales are default/zero, estimate them dynamically from current history
-        # so that the fit line is drawn exactly at the height of the raw signal
+        # Estimate offsets and scales from the current history when the
+        # calibration values are still at their defaults
         if offset_s1 == 0.0 or scale_s1 == 1.0:
             if s1_hist:
                 offset_s1 = sum(s1_hist) / len(s1_hist)
@@ -3865,13 +4109,26 @@ class HomodyneGui:
                 if scale_s2 < 0.01:
                     scale_s2 = 0.1
 
-        # Determine peak-to-peak variation to check if there is signal activity to fit
+        # Measure the peak-to-peak variation to decide whether a fit is useful
         peak_to_peak_s1 = max(s1_hist) - min(s1_hist) if s1_hist else 0.0
         peak_to_peak_s2 = max(s2_hist) - min(s2_hist) if s2_hist else 0.0
 
         is_measuring = getattr(self, 'measuring', False) or getattr(self, 'calibrating', False)
         if not is_measuring and (peak_to_peak_s1 < 0.05 or peak_to_peak_s2 < 0.05):
-            # Clear Lissajous circle trace so it doesn't show a noise circle
+            # Draw flat gray lines at the average raw signal level
+            mean_s1 = sum(s1_hist) / len(s1_hist) if s1_hist else 0.0
+            mean_s2 = sum(s2_hist) / len(s2_hist) if s2_hist else 0.0
+            fit_s1 = [mean_s1] * len(s1_hist)
+            fit_s2 = [mean_s2] * len(s2_hist)
+
+            self.plot_lines['S1_raw_fit'].set_color('gray')
+            self.plot_lines['S2_raw_fit'].set_color('gray')
+            self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+            self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+            self.plot_lines['S1_raw_fit'].set_visible(True)
+            self.plot_lines['S2_raw_fit'].set_visible(True)
+
+            # Clear the Lissajous trace so noise is not drawn as a circle
             self.plot_lines['circle_trace'].set_data([], [])
             self.plot_lines['circle_current'].set_data([], [])
             self.plot_lines['circle_pointer'].set_data([], [])
@@ -3880,25 +4137,27 @@ class HomodyneGui:
             self.plot_canvas_circle.draw_idle()
             return
 
+        # Convert the raw samples into normalized values
         for r1, r2 in zip(s1_hist, s2_hist):
             s1 = (r1 - offset_s1) / (scale_s1 if scale_s1 > 1e-12 else 1.0)
             s2 = (r2 - offset_s2) / (scale_s2 if scale_s2 > 1e-12 else 1.0)
             s1_norm_history.append(s1)
             s2_norm_history.append(s2)
 
-        # Compute the phase at each normalized sample
+        # Compute the phase for every normalized sample pair
         phases = [math.atan2(y, x) for x, y in zip(s1_norm_history, s2_norm_history)]
         
-        # Unwrap the phases to avoid jumps during fitting
+        # Unwrap the phase trace so the fit does not jump by 2 pi
         unwrapped_phases = []
         if phases:
             unwrapped_phases.append(phases[0])
+        # Accumulate the unwrapped phase sample by sample
             for i in range(1, len(phases)):
                 diff = phases[i] - phases[i-1]
                 diff = (diff + math.pi) % (2 * math.pi) - math.pi
                 unwrapped_phases.append(unwrapped_phases[-1] + diff)
         
-        # Fit a line (linear regression) to the phase of the last 20 samples to filter out noise
+        # Fit a line to the last 20 samples to smooth out short noise spikes
         fitted_phases = list(unwrapped_phases)
         N = 20
         if len(unwrapped_phases) >= N:
@@ -3906,24 +4165,36 @@ class HomodyneGui:
             sum_x2 = sum(float(j)**2 for j in range(N))
             denom = N * sum_x2 - sum_x**2
             
+            # Replace each window tail with the fitted end-point value
             for i in range(N - 1, len(unwrapped_phases)):
                 y = unwrapped_phases[i - N + 1 : i + 1]
                 sum_y = sum(y)
                 sum_xy = sum(float(j) * y[j] for j in range(N))
                 a = (N * sum_xy - sum_x * sum_y) / denom
                 b = (sum_y - a * sum_x) / N
-                # Value at the end of the window (index N-1)
+                # Use the fitted value at the last index of the window
                 fitted_phases[i] = a * (N - 1) + b
 
-        # Reconstruct the smoothed/fitted sine and cosine (perfect unit circle!)
+        # Reconstruct the smoothed sine and cosine on the unit circle
         smoothed_s1 = [math.cos(p) for p in fitted_phases]
         smoothed_s2 = [math.sin(p) for p in fitted_phases]
 
-        # Use unit circle values directly for plotting to keep it perfectly undistorted
+        # Use the unit circle values directly so the plot stays undistorted
         display_s1 = smoothed_s1
         display_s2 = smoothed_s2
 
         self.plot_lines['circle_trace'].set_data(display_s1, display_s2)
+
+        # Scale the fit back to raw voltage levels for the S1 and S2 plots
+        fit_s1 = [s * scale_s1 + offset_s1 for s in smoothed_s1]
+        fit_s2 = [s * scale_s2 + offset_s2 for s in smoothed_s2]
+
+        self.plot_lines['S1_raw_fit'].set_color('orange')
+        self.plot_lines['S2_raw_fit'].set_color('magenta')
+        self.plot_lines['S1_raw_fit'].set_data(x, fit_s1)
+        self.plot_lines['S2_raw_fit'].set_data(x, fit_s2)
+        self.plot_lines['S1_raw_fit'].set_visible(True)
+        self.plot_lines['S2_raw_fit'].set_visible(True)
 
         if display_s1:
             curr_x = display_s1[-1]
@@ -3931,7 +4202,7 @@ class HomodyneGui:
             self.plot_lines['circle_current'].set_data([curr_x], [curr_y])
             self.plot_lines['circle_pointer'].set_data([0, curr_x], [0, curr_y])
 
-            # Ensure the axes limits are always a bit larger than the actual plotted values
+            # Keep a small margin around the visible circle
             max_extent = 1.0
             if display_s1 and display_s2:
                 max_extent = max(max(abs(v) for v in display_s1), max(abs(v) for v in display_s2), 1.0)
@@ -3973,10 +4244,11 @@ class HomodyneGui:
         self.plot_canvas.draw_idle()
         self.plot_canvas_circle.draw_idle()
 
-    # -----------------------------------------------------------------------------
-    # 9.1 SHUT DOWN HARDWARE CLEANLY
-    # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# 9.1 Shut Down Hardware Cleanly
+# -----------------------------------------------------------------------------
 
+    # Close hardware and destroy the window
     def on_close(self):
         self.monitoring = False
 
@@ -3993,13 +4265,10 @@ class HomodyneGui:
 
         self.root.destroy()
 
+    # Start the Tkinter main loop
     def run(self):
         self.root.mainloop()
 
-# -----------------------------------------------------------------------------
-# 9. PROGRAM START
-# -----------------------------------------------------------------------------
-
-# 9. PROGRAM START
+# 9. Program Start
 if __name__ == "__main__":
     run_gui()

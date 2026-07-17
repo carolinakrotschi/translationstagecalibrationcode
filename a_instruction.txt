@@ -2,7 +2,7 @@ This document serves as an instruction, when the setup is already built and in n
 For any component information / which exact optical components I used, you can scan through my thesis
 
 connecting the Hardware
-1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because the hardware ROI is set to exactly 40x40 pixels in the middle
+1. go to thorcam software and look at the image: is there interference? is the interference in the middle? Because if you use detection with the camera, the hardware ROI is set to exactly 40x40 pixels in the middle
 2. for the stage
     2.1 pi stage
         2.1.1 go to pimikromove software and select the stage then go to axes and refposition and start to initialize the stage put a check on servo

@@ -17,8 +17,8 @@ from dataclasses import dataclass
 # 2. DIODE SETUP CONSTANTS
 # -----------------------------------------------------------------------------
 
-PHOTODIODE_CHANNEL = "Dev1/ai1"
-PHOTODIODE_REF_CHANNEL = "Dev1/ai0"
+PHOTODIODE_CHANNEL = "Dev1/ai0"
+PHOTODIODE_REF_CHANNEL = "Dev1/ai1s"
 
 USE_REFERENCE_DIODE = True
 
@@ -30,6 +30,24 @@ SAMPLE_INTERVAL_S = 0.005
 LASER_WAVELENGTH_NM = 787.3
 PHASE_DIRECTION_SIGN = 1
 MIN_SIGNAL_RADIUS = 0.05
+
+# So that you do not have to understand every line of the code, I will now explain the complete path of a diode signal through this file
+# 0. What is happening: class in which it is happening : function in the class in which it is happening : what is happening explained in a more precise way
+# 1. The diode settings are defined: global constants : module setup : stores the NI channels, calibration time, sampling interval, wavelength, and signal limits
+# 2. The fringe distance is calculated: helper function : compute_fringe_distance_mm() : converts the laser wavelength into the distance corresponding to one fringe
+# 3. The phase is processed: helper functions : wrap_to_pi() / completed_signed_fringes() : corrects phase jumps and converts phase into a signed fringe count
+# 4. The single-diode hardware is connected: NISingleDiodeReader : connect() : creates the NI task for one analog voltage channel
+# 5. The single-diode signal is calibrated: SingleDiodeCounter : calibrate_from_samples() : calculates voltage minimum, maximum, offset, and scale
+# 6. The single-diode signal is read and normalized: SingleDiodeHandler : read() : reads the raw voltage and returns a processed sample
+# 7. The quadrature-diode hardware is connected: NIDiodeReader : connect() : creates an NI task for the cosine and sine channels
+# 8. The quadrature signals are calibrated: DiodeQuadratureCounter : calibrate_from_samples() : calculates offsets and scales for both channels
+# 9. Phase and fringes are calculated: DiodeQuadratureCounter : update() : determines phase, movement direction, fringe count, and signal validity
+# 10. The measured displacement is calculated: DiodeQuadratureCounter : signed_distance_mm() : converts the accumulated phase into a signed distance
+# 11. The reference diodes are connected: NIReferenceDiodeReader : connect() : creates an NI task for the measurement and reference channels
+# 12. The reference signal is calibrated: ReferenceDiodeCounter : calibrate_from_samples() : calculates the offset and scale of the voltage ratio
+# 13. The reference ratio is processed: ReferenceDiodeCounter : update() : divides the measurement voltage by the reference voltage and normalizes the result
+# 14. Calibration is managed: SingleDiodeHandler / DiodeHandler / ReferenceDiodeHandler : calibrate() : collects samples for a defined time and applies the calibration
+# 15. The hardware connections are closed: reader classes : close() : closes the NI tasks and releases the hardware resources
 
 # -----------------------------------------------------------------------------
 # CALCULATE THE FRINGE DISTANCE
