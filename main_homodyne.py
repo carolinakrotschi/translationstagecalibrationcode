@@ -27,17 +27,10 @@ CALIBRATION_STAGE_SPEED_MM_S = (
     2 * CALIBRATION_STAGE_DISTANCE_MM
 ) / CALIBRATION_STAGE_MOTION_SECONDS
 
-RAW_HISTORY_LENGTH = 300
 STEP_PAUSE_S = 0.05
 STAGE_STATUS_POLL_MS = 100
 
-MODE = "continuous"
 VELOCITY_MM_S = 0.0006
-TOTAL_DISTANCE_MM = 13.0
-
-VELOCITY_MM_S_STEPPED = 1.00
-STEP_SIZE_MM = 0.00001
-STEPS = 100
 
 SAMPLE_INTERVAL_S = 0.005
 UI_UPDATE_INTERVAL_S = 0.05
@@ -47,7 +40,6 @@ LOCK_CORRECTION_COOLDOWN_S = 0.30
 
 STAGE_CORRECTION_SIGN = 1
 STAGE_MOVE_TIMEOUT_S = 60.0
-STAGE_CHECK_TIMEOUT_S = 180.0
 STAGE_POLL_INTERVAL_S = 0.05
 
 # -----------------------------------------------------------------------------
@@ -565,14 +557,6 @@ class HomodyneQuadratureCounter:
                 * self.fringe_distance_mm
             )
 
-    def correction_to_zero_mm(self, stage_direction_sign=1):
-        distance_mm = self.signed_distance_mm()
-
-        if distance_mm is None:
-            return None
-
-        return -stage_direction_sign * distance_mm
-
 class HomodyneMonitor:
     # -----------------------------------------------------------------------------
     # 4.1 INITIALIZATION
@@ -649,48 +633,6 @@ def run_gui():
     gui = HomodyneGui()
     gui.run()
 
-def run_print_loop():
-    monitor = HomodyneMonitor()
-
-    try:
-        monitor.connect()
-        print("NI connected on Dev1/ai0 and Dev1/ai1.")
-        print("Calibrating photodiode offsets and amplitudes...")
-        print("Move the stage during calibration so the circle is sampled.")
-        monitor.calibrate()
-        print("Monitoring. Stop with Ctrl+C.")
-
-        while True:
-            sample = monitor.read()
-            distance_mm = monitor.counter.signed_distance_mm()
-
-            if distance_mm is None:
-                distance_text = "n/a"
-            else:
-                distance_text = f"{distance_mm:+.9f} mm"
-
-            print(
-                "phase="
-                f"{sample.unwrapped_phase_rad:+.4f} rad, "
-                "fringe_position="
-                f"{sample.fringe_position:+.4f}, "
-                "signed_fringes="
-                f"{sample.signed_fringes:+d}, "
-                "fringe_delta="
-                f"{sample.fringe_delta:+d}, "
-                "direction="
-                f"{sample.direction}, "
-                "distance="
-                f"{distance_text}"
-            )
-
-            time.sleep(SAMPLE_INTERVAL_S)
-
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        monitor.close()
-
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
 # -----------------------------------------------------------------------------
@@ -744,10 +686,6 @@ class HomodyneGui:
         self.raw_s1_history = []
         self.raw_s2_history = []
         self.sample_display_lock = threading.Lock()
-        self.pending_sample = None
-        self.pending_distance_mm = None
-        self.sample_display_scheduled = False
-        self.last_sample_display_time = 0.0
 
         self.stage = StageController() if StageController is not None else None
         if self.stage is not None:
@@ -1470,42 +1408,6 @@ class HomodyneGui:
             text_color=TEXT_COLOR
         ).pack(pady=(8, 8))
 
-    def make_value_label(self, parent, name, initial_value):
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=18, pady=5)
-
-        ctk.CTkLabel(
-            row,
-            text=f"{name}:",
-            width=180,
-            anchor="w",
-            font=("Arial", 12, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(side="left")
-
-        label = ctk.CTkLabel(
-            row,
-            text=initial_value,
-            anchor="w",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        label.pack(side="left", fill="x", expand=True)
-        return label
-
-    def make_formula_label(self, parent, text):
-        label = ctk.CTkLabel(
-            parent,
-            text=text,
-            anchor="w",
-            justify="left",
-            wraplength=620,
-            font=("Arial", 11),
-            text_color=TEXT_COLOR
-        )
-        label.pack(fill="x", padx=18, pady=2)
-        return label
-
     def fringe_distance_text(self):
         return (
             f"Fringe distance: {self.fringe_distance_mm:.9f} mm "
@@ -1570,37 +1472,6 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
-    def apply_stage_step_size(self):
-        try:
-            step_mm = self.parse_entry_float(self.step_entry)
-        except ValueError:
-            self.status.configure(
-                text="Status: invalid stage step size",
-                text_color=RED_COLOR
-            )
-            return
-
-        step_mm = abs(step_mm)
-
-        if step_mm <= 0:
-            self.status.configure(
-                text="Status: stage step size must be positive",
-                text_color=RED_COLOR
-            )
-            return
-
-        self.stage_step_mm = step_mm
-        self.step_entry.delete(0, "end")
-        self.step_entry.insert(
-            0,
-            f"{self.stage_step_mm:.9f}"
-        )
-
-        self.status.configure(
-            text=f"Status: stage step set to {self.stage_step_mm:.9f} mm",
-            text_color=GREEN_COLOR
-        )
-
     def limited_stage_correction_mm(self, correction_mm):
         if self.stage_step_mm <= 0:
             return correction_mm
@@ -1616,44 +1487,6 @@ class HomodyneGui:
         state = "normal" if enabled else "disabled"
         for button in self.all_buttons:
             button.configure(state=state)
-
-    def finish_stage_command_ui(self):
-        self.stage_command_active = False
-        self.set_buttons_enabled(True)
-
-    def queue_sample_display(self, sample, distance_mm, force=False):
-        with self.sample_display_lock:
-            self.pending_sample = sample
-            self.pending_distance_mm = distance_mm
-
-            if self.sample_display_scheduled:
-                return
-
-            now = time.monotonic()
-            elapsed_s = now - self.last_sample_display_time
-            delay_s = 0.0 if force else max(
-                0.0,
-                UI_UPDATE_INTERVAL_S - elapsed_s
-            )
-            self.sample_display_scheduled = True
-
-        self.root.after(
-            int(delay_s * 1000),
-            self.flush_sample_display
-        )
-
-    def flush_sample_display(self):
-        with self.sample_display_lock:
-            sample = self.pending_sample
-            distance_mm = self.pending_distance_mm
-            self.pending_sample = None
-            self.pending_distance_mm = None
-            self.sample_display_scheduled = False
-
-        self.last_sample_display_time = time.monotonic()
-
-        if sample is not None:
-            self.update_sample_display(sample, distance_mm)
 
     def set_status_from_thread(self, text, color=TEXT_COLOR):
         self.root.after(
@@ -1690,31 +1523,6 @@ class HomodyneGui:
                 f"Stage Position: {p:.6f} mm"
             ) if p is not None else None
         )
-
-    def wait_for_stage_motion(self, timeout_s=STAGE_MOVE_TIMEOUT_S):
-        start_time = time.monotonic()
-        last_position_update_s = 0.0
-
-        while self.stage is not None and self.stage.is_moving:
-            if time.monotonic() - start_time > timeout_s:
-                self.stage.stop()
-                raise RuntimeError("stage move timeout")
-
-            position_mm = self.stage.current_position
-            now = time.monotonic()
-
-            if now - last_position_update_s >= STAGE_POLL_INTERVAL_S:
-                self.set_stage_position_from_thread(position_mm)
-                last_position_update_s = now
-
-            time.sleep(STAGE_POLL_INTERVAL_S)
-
-        if self.stage is None or not self.stage_connected:
-            return None
-
-        position_mm = self.stage.get_position()
-        self.set_stage_position_from_thread(position_mm)
-        return position_mm
 
     def ensure_stage_connected_for_calibration(self):
         if self.stage is None:
@@ -1797,11 +1605,6 @@ class HomodyneGui:
         self.raw_s1_history = []
         self.raw_s2_history = []
         self.calibration_raw_samples = []
-        with self.sample_display_lock:
-            self.pending_sample = None
-            self.pending_distance_mm = None
-            self.sample_display_scheduled = False
-        self.last_sample_display_time = 0.0
         self.reset_calculation_display()
         self.disable_lock(update_status=False)
 
@@ -2041,26 +1844,6 @@ class HomodyneGui:
             args=(start_pos, target_mm, step_mm, pause_s, label_prefix),
             daemon=True
         ).start()
-
-    # -----------------------------------------------------------------------------
-    # 6.4 MOVE STAGE RELATIVELY IN STEPS
-    # -----------------------------------------------------------------------------
-
-    def start_stage_move_by_steps(self, move_mm, step_mm=None, pause_s=STEP_PAUSE_S, label_prefix="Moving"):
-        if not self.stage_connected or self.stage is None:
-            self.status.configure(
-                text="Stage not connected",
-                text_color=RED_COLOR
-            )
-            return
-
-        start_pos = self.stage.get_position()
-        self.start_stage_move_to_stepped(
-            start_pos + move_mm,
-            step_mm=step_mm,
-            pause_s=pause_s,
-            label_prefix=label_prefix
-        )
 
     # -----------------------------------------------------------------------------
     # 6.5 WORKER FOR STEPPED MOVEMENT
@@ -2445,134 +2228,6 @@ class HomodyneGui:
         )
 
     # -----------------------------------------------------------------------------
-    # 8.8 RUN STAGE MOTION BY PARAMETERS
-    # -----------------------------------------------------------------------------
-
-    def run_stage_motion_by_parameters(self):
-        if not self.stage_connected or self.stage is None:
-            return
-
-        current_position = self.stage.get_position()
-        if MODE.lower().startswith("c"):
-            self.stage.set_velocity(VELOCITY_MM_S)
-            final_target = self.stage.clamp_position(current_position + TOTAL_DISTANCE_MM)
-
-            self.stage_start_position = current_position
-            self.stage_movement_before_move = self.total_stage_movement
-            self.set_stage_target_position(final_target, current_position)
-            self.reset_stage_speed_tracking(current_position)
-
-            self.root.after(
-                0,
-                lambda:
-                self.status.configure(
-                    text=f"Continuous move to {final_target:.6f} mm at {VELOCITY_MM_S} mm/s",
-                    text_color=TEXT_COLOR
-                )
-            )
-
-            if not self.stage.move_absolute(final_target):
-                self.root.after(
-                    0,
-                    lambda:
-                    self.status.configure(
-                        text="Stage move failed",
-                        text_color=RED_COLOR
-                    )
-                )
-                self.root.after(0, self.clear_stage_target_position)
-                return
-
-            while self.stage.is_moving and self.monitoring:
-                pos = self.stage.get_position()
-                moved = abs(pos - self.stage_start_position)
-                self.root.after(
-                    0,
-                    lambda p=pos, m=moved, b=self.stage_movement_before_move:
-                    self.update_stage_labels(p, m, b)
-                )
-                time.sleep(0.05)
-
-            pos = self.stage.get_position()
-            moved = abs(pos - self.stage_start_position)
-            self.total_stage_movement = self.stage_movement_before_move + moved
-            self.root.after(
-                0,
-                lambda p=pos:
-                self.finish_stage_move(p)
-            )
-        else:
-            self.stage.set_velocity(VELOCITY_MM_S_STEPPED)
-
-            self.stage_start_position = current_position
-            self.stage_movement_before_move = self.total_stage_movement
-            stepped_target = self.stage.clamp_position(
-                current_position + STEP_SIZE_MM * STEPS
-            )
-            self.set_stage_target_position(stepped_target, current_position)
-            self.reset_stage_speed_tracking(current_position)
-
-            self.root.after(
-                0,
-                lambda:
-                self.status.configure(
-                    text=f"Stepped move: {STEPS} steps of {STEP_SIZE_MM} mm",
-                    text_color=TEXT_COLOR
-                )
-            )
-
-            current_pos = current_position
-            moved = 0.0
-
-            for step in range(STEPS):
-                if not self.monitoring:
-                    break
-
-                next_position = self.stage.clamp_position(current_pos + STEP_SIZE_MM)
-                self.root.after(
-                    0,
-                    lambda s=step, n=next_position:
-                    self.status.configure(
-                        text=f"Step {s + 1}/{STEPS}: move to {n:.7f} mm",
-                        text_color=TEXT_COLOR
-                    )
-                )
-
-                if not self.stage.move_absolute(next_position):
-                    self.root.after(
-                        0,
-                        lambda:
-                        self.status.configure(
-                            text="Move command failed",
-                            text_color=RED_COLOR
-                        )
-                    )
-                    break
-
-                while self.stage.is_moving and self.monitoring:
-                    time.sleep(0.01)
-
-                step_distance = abs(next_position - current_pos)
-                moved += step_distance
-                current_pos = next_position
-
-                self.total_stage_movement = self.stage_movement_before_move + moved
-                self.root.after(
-                    0,
-                    lambda p=current_pos, m=moved, b=self.stage_movement_before_move:
-                    self.update_stage_labels(p, m, b)
-                )
-
-                if step < STEPS - 1:
-                    time.sleep(STEP_PAUSE_S)
-
-            self.root.after(
-                0,
-                lambda p=current_pos:
-                self.finish_stage_move(p)
-            )
-
-    # -----------------------------------------------------------------------------
     # 7.7 MOVE STAGE DURING CALIBRATION
     # -----------------------------------------------------------------------------
 
@@ -2762,8 +2417,6 @@ class HomodyneGui:
         with self.sample_display_lock:
             sample = self.latest_sample
             distance_mm = self.latest_distance_mm
-            s1_hist = list(self.raw_s1_history)
-            s2_hist = list(self.raw_s2_history)
 
             single_fringes = self.monitor.single_counter.accumulated_fringes
             single_distance = single_fringes * self.fringe_distance_mm
@@ -2896,7 +2549,7 @@ class HomodyneGui:
 
             self.root.after(0, self.start_ui_loop)
 
-            calibration = self.monitor.calibrate(
+            self.monitor.calibrate(
                 seconds=CALIBRATION_SECONDS,
                 sample_interval_s=SAMPLE_INTERVAL_S,
                 should_continue=lambda: self.monitoring,
@@ -3315,10 +2968,6 @@ class HomodyneGui:
         self.latest_distance_mm = None
         self.raw_s1_history = []
         self.raw_s2_history = []
-        with self.sample_display_lock:
-            self.pending_sample = None
-            self.pending_distance_mm = None
-
         self.reset_calculation_display()
         self.label_lock_status.configure(text="Lock: off", text_color=TEXT_COLOR)
         self.label_lock_reference.configure(text="Reference: n/a")

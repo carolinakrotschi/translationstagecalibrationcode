@@ -108,7 +108,7 @@ ORANGE_COLOR = "#D35400"
 # 10. Errors, stopped states, and resets are handled: SideApp : show_error() / finish_stopped_ui() / restart() / restart_values_only() : displays errors and resets all measurement and interface values
 # 11. User inputs are read and applied: SideApp : parse_entry_float() / get_step_size() / get_stage_speed() / apply_wavelength() / apply_stage_speed() : validates the wavelength, step size, and stage speed
 # 12. Stage movements are prepared and started: SideApp : prepare_stage_for_move() / start_stage_move_to() / start_stage_move_by() : checks the stage and starts absolute or relative movement
-# 13. Stepped stage movements are executed: SideApp : start_stage_move_to_stepped() / start_stage_move_by_steps() / stage_stepped_move_worker() : divides a movement into smaller steps and performs them
+# 13. Stepped stage movements are executed: SideApp : start_stage_move_to_stepped() / stage_stepped_move_worker() : divides a movement into smaller steps and performs them
 # 14. Stage movement is monitored and completed: SideApp : stage_ui_loop() / finish_stage_move() : tracks the current position, movement distance, and final position
 # 15. Manual stage controls are processed: SideApp : move_to_min() / step_negative() / move_to_center() / step_positive() / move_to_max() / move_to_target() / move_distance() / stop_stage() : executes the stage button commands
 # 16. Stage values are displayed and reset: SideApp : update_stage_position_once() / update_stage_labels() / reset_stage_speed_tracking() / update_stage_speed_label() / reset_stage_movement_tracking() : updates position, speed, and accumulated movement
@@ -161,8 +161,6 @@ class SideApp(ctk.CTk):
         self.measurement_thread = None
         #for the 5s calibration at the beginning
         self.calibrating = False
-        self.latest_sample = None
-        self.latest_voltage = 0.0
         self.last_error_text = None
 
         self.raw_voltage_history = []
@@ -175,8 +173,6 @@ class SideApp(ctk.CTk):
         self.dark_counter = 0
         self.bright_counter = 0
         self.last_count_time = 0.0
-        self.dark_threshold = 0.0
-        self.bright_threshold = 0.0
         default_amp = DEFAULT_FRINGE_AMPLITUDE_V
         self.fringe_amplitude_voltage = default_amp
         self.fringe_rise_threshold_voltage = (
@@ -1068,16 +1064,6 @@ class SideApp(ctk.CTk):
             fringe_amplitude_voltage
         )
 
-        value_range = fringe_max_voltage - fringe_min_voltage
-        self.dark_threshold = (
-            fringe_min_voltage
-            + value_range * 0.125
-        )
-        self.bright_threshold = (
-            fringe_max_voltage
-            - value_range * 0.40
-        )
-
         if USE_REFERENCE_DIODE:
             self.label_calibration.configure(
                 text=(
@@ -1264,17 +1250,6 @@ class SideApp(ctk.CTk):
 
         amplitudes = []
 
-        for index in range(1, len(compressed_extrema)):
-            previous_kind, previous_value = compressed_extrema[index - 1]
-            current_kind, current_value = compressed_extrema[index]
-
-            if previous_kind == current_kind:
-                continue
-
-            amplitude = abs(
-                current_value - previous_value
-            )
-
         min_valid = MIN_VALID_FRINGE_AMPLITUDE_V
         max_valid = 0.8 if USE_REFERENCE_DIODE else MAX_VALID_FRINGE_AMPLITUDE_V
         default_amp = DEFAULT_FRINGE_AMPLITUDE_V
@@ -1402,14 +1377,11 @@ class SideApp(ctk.CTk):
 
     def update_sample_display(self, sample):
 
-        self.latest_sample = sample
-
         if USE_REFERENCE_DIODE:
             val = sample.ratio
         else:
             val = sample.raw_voltage
 
-        self.latest_voltage = val
         fringe_counted = self.update_accumulated_fringes(val)
 
         self.append_raw_history(val)
@@ -1639,8 +1611,6 @@ class SideApp(ctk.CTk):
         if self.diode is not None:
             self.diode.counter.reset()
 
-        self.latest_sample = None
-        self.latest_voltage = 0.0
         self.raw_voltage_history = []
         self.calibration_raw_samples = []
         self.smoothed_voltage_history = []
@@ -2035,35 +2005,6 @@ class SideApp(ctk.CTk):
             args=(start_pos, target_mm, step_mm, pause_s, label_prefix),
             daemon=True
         ).start()
-
-    # -----------------------------------------------------------------------------
-    # 6.4 MOVE STAGE RELATIVELY IN STEPS
-    # -----------------------------------------------------------------------------
-
-    def start_stage_move_by_steps(
-        self,
-        move_mm,
-        step_mm=None,
-        pause_s=STEP_PAUSE_S,
-        label_prefix="Moving"
-    ):
-
-        #security checks so the code doesnt crash
-        if not self.stage_connected: # translation stage connected?
-            self.status.configure(
-                text="Stage not connected",
-                text_color=RED_COLOR
-            )
-            return
-
-        start_pos = self.stage.get_position()
-
-        self.start_stage_move_to_stepped(
-            start_pos + move_mm,
-            step_mm=step_mm,
-            pause_s=pause_s,
-            label_prefix=label_prefix
-        )
 
     # -----------------------------------------------------------------------------
     # 6.5 WORKER FOR STEPPED MOVEMENT

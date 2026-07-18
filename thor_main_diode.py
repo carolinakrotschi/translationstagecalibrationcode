@@ -37,7 +37,6 @@ MAX_VALID_FRINGE_AMPLITUDE_V = 0.020
 FRINGE_RISE_FRACTION = 0.50
 FRINGE_REARM_FRACTION = 0.25
 DARK_LEVEL_FRACTION = 0.50
-BRIGHT_LEVEL_FRACTION = 0.80
 RAW_HISTORY_LENGTH = 300
 SMOOTHING_WINDOW_LENGTH = 3
 STEP_PAUSE_S = 0.05
@@ -177,15 +176,12 @@ class SideApp(ctk.CTk):
         self.measurement_thread = None
         #for the 5s calibration at the beginning
         self.calibrating = False
-        self.latest_sample = None
-        self.latest_voltage = 0.0
         self.last_error_text = None
 
         self.raw_voltage_history = []
         self.clean_voltage_history = []
         self.calibration_raw_samples = []
         self.baseline_voltage = 0.0
-        self.baseline_recorded = False
         self.smoothed_voltage_history = []
         self.recording = False
         self.recorded_data = []
@@ -200,7 +196,6 @@ class SideApp(ctk.CTk):
         self.bright_counter = 0
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
-        self.bright_threshold = 0.0
         self.fringe_amplitude_voltage = DEFAULT_FRINGE_AMPLITUDE_V
         self.noise_amplitude_voltage = DEFAULT_NOISE_AMPLITUDE_V
         self.min_count_amplitude_voltage = MIN_VALID_FRINGE_AMPLITUDE_V
@@ -230,7 +225,6 @@ class SideApp(ctk.CTk):
 
         #stores values for all the start positions
         self.stage_start_position = 0.0
-        self.stage_reference_position = 0.0
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
@@ -751,8 +745,6 @@ class SideApp(ctk.CTk):
             text_color=TEXT_COLOR
         ).pack(side="left")
 
-        self.show_cleaned = False
-
         self.build_plot()
 
     # -----------------------------------------------------------------------------
@@ -937,10 +929,8 @@ class SideApp(ctk.CTk):
 
             if baseline_samples:
                 self.baseline_voltage = sum(baseline_samples) / len(baseline_samples)
-                self.baseline_recorded = True
             else:
                 self.baseline_voltage = 0.0
-                self.baseline_recorded = True
 
             self.after(
                 0,
@@ -1091,10 +1081,6 @@ class SideApp(ctk.CTk):
         self.dark_threshold = (
             fringe_min_voltage
             + value_range * DARK_LEVEL_FRACTION
-        )
-        self.bright_threshold = (
-            fringe_min_voltage
-            + value_range * BRIGHT_LEVEL_FRACTION
         )
 
         self.label_calibration.configure(
@@ -1432,8 +1418,6 @@ class SideApp(ctk.CTk):
 # Update the live sample labels
     def update_sample_display(self, sample):
 
-        self.latest_sample = sample
-        self.latest_voltage = sample.raw_voltage
         fringe_counted = self.update_accumulated_fringes(
             sample.raw_voltage
         )
@@ -1709,8 +1693,6 @@ class SideApp(ctk.CTk):
         if self.diode is not None:
             self.diode.counter.reset()
 
-        self.latest_sample = None
-        self.latest_voltage = 0.0
         self.raw_voltage_history = []
         self.clean_voltage_history = []
         self.calibration_raw_samples = []
@@ -1725,7 +1707,6 @@ class SideApp(ctk.CTk):
         self.bright_counter = 0
         self.last_count_time = 0.0
         self.dark_threshold = 0.0
-        self.bright_threshold = 0.0
         self.noise_amplitude_voltage = DEFAULT_NOISE_AMPLITUDE_V
         self.min_count_amplitude_voltage = MIN_VALID_FRINGE_AMPLITUDE_V
         self.fringe_trough_voltage = None
@@ -2146,35 +2127,6 @@ class SideApp(ctk.CTk):
         ).start()
 
     # -----------------------------------------------------------------------------
-    # 6.4 MOVE STAGE RELATIVELY IN STEPS
-    # -----------------------------------------------------------------------------
-# Start a relative stepped move
-    def start_stage_move_by_steps(
-        self,
-        move_mm,
-        step_mm=None,
-        pause_s=STEP_PAUSE_S,
-        label_prefix="Moving"
-    ):
-
-        #security checks so the code doesnt crash
-        if not self.stage_connected: # translation stage connected?
-            self.status.configure(
-                text="Stage not connected",
-                text_color=RED_COLOR
-            )
-            return
-
-        start_pos = self.stage.get_position()
-
-        self.start_stage_move_to_stepped(
-            start_pos + move_mm,
-            step_mm=step_mm,
-            pause_s=pause_s,
-            label_prefix=label_prefix
-        )
-
-    # -----------------------------------------------------------------------------
     # 6.5 WORKER FOR STEPPED MOVEMENT
     # -----------------------------------------------------------------------------
 # Execute the stepped move in the background
@@ -2433,7 +2385,6 @@ class SideApp(ctk.CTk):
 
         if self.stage_connected:
             pos = self.stage.get_position()
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
@@ -2632,14 +2583,9 @@ class SideApp(ctk.CTk):
         self.stage_remaining_known = True
 
         if pos is not None: # use provided position as new reference
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-        elif self.stage_connected: # if the stage is connected use actual hardware position as reference
-            self.stage_reference_position = self.stage.get_position()
-        else:
-            self.stage_reference_position = 0.0
 
         self.label_stage_moved.configure(
             text="Accumulated Movement: 0.000000 mm"
@@ -2988,7 +2934,6 @@ class SideApp(ctk.CTk):
         if accumulated_movement_mm is None:
             self.reset_stage_movement_tracking(pos)
         else:
-            self.stage_reference_position = pos
             self.total_stage_movement = accumulated_movement_mm
             self.current_stage_movement_for_compare = accumulated_movement_mm
 

@@ -21,12 +21,7 @@ STEP_PAUSE_S = 0.05 #pause between steps in stepped mode
 #the number of consecutive dark or bright frames required to count a fringe, this is to filter out noise and avoid counting false fringes due to intensity fluctuations
 REQUIRED_DARK_FRAMES = 3
 REQUIRED_BRIGHT_FRAMES = 3
-MODE = "continuous" #"continuous" or "stepped" - determines how the stage moves
 VELOCITY_MM_S = 0.0006 #speed for continuous mode
-TOTAL_DISTANCE_MM = 13.0 #total distance to move in continuous mode
-VELOCITY_MM_S_STEPPED = 1.00 #speed for stepped mode
-STEP_SIZE_MM = 0.00001 #step size for stepped mode
-STEPS = 100 #number of steps for stepped mode
 
 # -----------------------------------------------------------------------------
 # 2. IMPORTS
@@ -96,13 +91,12 @@ ORANGE_COLOR = "#D35400"
 # 11. The latest sample is displayed: SideApp : update_sample_display() : updates the displayed voltage, fringe, and distance values
 # 12. The raw history is extended: SideApp : append_raw_history() : stores recent voltage values for plotting
 # 13. The plot is refreshed: SideApp : update_plot() : redraws the live signal display
-# 14. A stage movement is started: SideApp : run_stage_motion_by_parameters() : starts the selected stage movement mode
-# 15. The stepped movement worker runs: SideApp : stage_stepped_move_worker() : executes step-by-step stage motion
-# 16. The stage status is monitored: SideApp : poll_stage_status() : continuously tracks position and movement
-# 17. A stage move is finalized: SideApp : finish_stage_move() : updates the final stage position and UI
-# 18. Recording is started or stopped: SideApp : toggle_recording() : enables or disables CSV recording
-# 19. Recorded data is saved: SideApp : save_recorded_data() : writes the recorded measurements to a CSV file
-# 20. The application is closed: SideApp : on_close() : closes hardware connections and terminates the program
+# 14. The stepped movement worker runs: SideApp : stage_stepped_move_worker() : executes step-by-step stage motion
+# 15. The stage status is monitored: SideApp : poll_stage_status() : continuously tracks position and movement
+# 16. A stage move is finalized: SideApp : finish_stage_move() : updates the final stage position and UI
+# 17. Recording is started or stopped: SideApp : toggle_recording() : enables or disables CSV recording
+# 18. Recorded data is saved: SideApp : save_recorded_data() : writes the recorded measurements to a CSV file
+# 19. The application is closed: SideApp : on_close() : closes hardware connections and terminates the program
 
 
 # -----------------------------------------------------------------------------
@@ -138,10 +132,7 @@ class SideApp(ctk.CTk):
         #measurement loop is not running at the beginning
         self.is_monitoring = False
         self.measurement_thread = None
-        #for the 5s calibration at the beginning
-        self.calibrating = False #all these parameters are for initialization of the photodiode-app
-        self.latest_sample = None
-        self.latest_voltage = 0.0
+        #all these parameters are for initialization of the photodiode-app
         self.last_error_text = None
         self.raw_voltage_history = []
         self.smoothed_voltage_history = []
@@ -168,7 +159,6 @@ class SideApp(ctk.CTk):
         self.stage_connected = self.stage.connect()
         #stores values for all the start positions
         self.stage_start_position = 0.0
-        self.stage_reference_position = 0.0
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
@@ -671,7 +661,6 @@ class SideApp(ctk.CTk):
         self.restart_values_only()
         self.diode = SingleDiodeHandler()
         self.is_monitoring = True
-        self.calibrating = True
         self.last_error_text = None
         self.btn.configure(
             text="STOP MONITORING",
@@ -694,7 +683,6 @@ class SideApp(ctk.CTk):
     # Stop monitoring and background activity
     def stop_monitoring(self):
         self.is_monitoring = False
-        self.calibrating = False
         if self.stage_connected and self.stage.is_moving:
             self.stage.stop()
         self.status.configure(
@@ -730,7 +718,6 @@ class SideApp(ctk.CTk):
             )
             if not self.is_monitoring:
                 return
-            self.calibrating = False
             if calibration is not None:
                 self.after(
                     0,
@@ -754,7 +741,6 @@ class SideApp(ctk.CTk):
             )
         finally:
             self.is_monitoring = False
-            self.calibrating = False
             try:
                 self.diode.close()
             except Exception:
@@ -840,8 +826,6 @@ class SideApp(ctk.CTk):
 
     # Update the live sample labels
     def update_sample_display(self, sample):
-        self.latest_sample = sample
-        self.latest_voltage = sample.raw_voltage
         fringe_counted = self.update_accumulated_fringes(
             sample.raw_voltage
         )
@@ -1001,8 +985,6 @@ class SideApp(ctk.CTk):
     def restart_values_only(self):
         if self.diode is not None:
             self.diode.counter.reset()
-        self.latest_sample = None
-        self.latest_voltage = 0.0
         self.raw_voltage_history = []
         self.smoothed_voltage_history = []
         #defines what the values should look like after pressing reset
@@ -1297,32 +1279,6 @@ class SideApp(ctk.CTk):
             daemon=True
         ).start()
     # -----------------------------------------------------------------------------
-    # 6.4 MOVE STAGE RELATIVELY IN STEPS
-    # -----------------------------------------------------------------------------
-
-    # Start a relative stepped move
-    def start_stage_move_by_steps(
-        self,
-        move_mm,
-        step_mm=None,
-        pause_s=STEP_PAUSE_S,
-        label_prefix="Moving"
-    ):
-        #security checks so the code doesnt crash
-        if not self.stage_connected: # translation stage connected?
-            self.status.configure(
-                text="Stage not connected",
-                text_color=RED_COLOR
-            )
-            return
-        start_pos = self.stage.get_position()
-        self.start_stage_move_to_stepped(
-            start_pos + move_mm,
-            step_mm=step_mm,
-            pause_s=pause_s,
-            label_prefix=label_prefix
-        )
-    # -----------------------------------------------------------------------------
     # 6.5 WORKER FOR STEPPED MOVEMENT
     # -----------------------------------------------------------------------------
 
@@ -1548,7 +1504,6 @@ class SideApp(ctk.CTk):
     def update_stage_position_once(self):
         if self.stage_connected:
             pos = self.stage.get_position()
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
@@ -1630,14 +1585,9 @@ class SideApp(ctk.CTk):
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
         if pos is not None: # use provided position as new reference
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-        elif self.stage_connected: # if the stage is connected use actual hardware position as reference
-            self.stage_reference_position = self.stage.get_position()
-        else:
-            self.stage_reference_position = 0.0
         self.label_stage_moved.configure(
             text="Accumulated Movement: 0.000000 mm"
         )
@@ -1669,126 +1619,6 @@ class SideApp(ctk.CTk):
         self.label_compare_difference.configure(
             text=f"Difference: {difference_mm:.6f} mm"
         )
-    # -----------------------------------------------------------------------------
-    # 8.8 RUN STAGE MOTION BY PARAMETERS
-    # -----------------------------------------------------------------------------
-
-    # Run movement based on the selected mode and UI values
-    def run_stage_motion_by_parameters(self):
-        if not self.stage_connected:
-            return
-        current_position = self.stage.get_position()
-        if MODE.lower().startswith("c"):
-            self.stage.set_velocity(VELOCITY_MM_S)
-            final_target = self.stage.clamp_position(current_position + TOTAL_DISTANCE_MM)
-            self.stage_start_position = current_position
-            self.stage_movement_before_move = self.total_stage_movement
-            self.reset_stage_speed_tracking(current_position)
-            self.after(
-                0,
-                lambda:
-                self.status.configure(
-                    text=(
-                        f"Continuous move to {final_target:.6f} mm "
-                        f"at {VELOCITY_MM_S} mm/s"
-                    ),
-                    text_color=TEXT_COLOR
-                )
-            )
-            if not self.stage.move_absolute(final_target):
-                self.after(
-                    0,
-                    lambda:
-                    self.status.configure(
-                        text="Stage move failed",
-                        text_color=RED_COLOR
-                    )
-                )
-                return
-            while self.stage.is_moving and self.is_monitoring:
-                pos = self.stage.get_position()
-                moved = abs(pos - self.stage_start_position)
-                self.after(
-                    0,
-                    lambda p=pos, m=moved, b=self.stage_movement_before_move:
-                    self.update_stage_labels(p, m, b)
-                )
-                time.sleep(0.05)
-            pos = self.stage.get_position()
-            moved = abs(pos - self.stage_start_position)
-            self.total_stage_movement = (
-                self.stage_movement_before_move + moved
-            )
-            self.after(
-                0,
-                lambda p=pos:
-                self.finish_stage_move(p)
-            )
-        else:
-            self.stage.set_velocity(VELOCITY_MM_S_STEPPED)
-            self.stage_start_position = current_position
-            self.stage_movement_before_move = self.total_stage_movement
-            self.reset_stage_speed_tracking(current_position)
-            self.after(
-                0,
-                lambda:
-                self.status.configure(
-                    text=(
-                        f"Stepped move: {STEPS} steps of "
-                        f"{STEP_SIZE_MM} mm"
-                    ),
-                    text_color=TEXT_COLOR
-                )
-            )
-            current_pos = current_position
-            moved = 0.0
-            for step in range(STEPS):
-                if not self.is_monitoring:
-                    break
-                next_position = self.stage.clamp_position(
-                    current_pos + STEP_SIZE_MM
-                )
-                self.after(
-                    0,
-                    lambda s=step, n=next_position:
-                    self.status.configure(
-                        text=(
-                            f"Step {s + 1}/{STEPS}: "
-                            f"move to {n:.7f} mm"
-                        ),
-                        text_color=TEXT_COLOR
-                    )
-                )
-                if not self.stage.move_absolute(next_position):
-                    self.after(
-                        0,
-                        lambda:
-                        self.status.configure(
-                            text="Move command failed",
-                            text_color=RED_COLOR
-                        )
-                    )
-                    break
-                while self.stage.is_moving and self.is_monitoring:
-                    time.sleep(0.01)
-                step_distance = abs(next_position - current_pos)
-                moved += step_distance
-                current_pos = next_position
-                self.total_stage_movement = (
-                    self.stage_movement_before_move + moved
-                )
-                self.after(
-                    0,
-                    lambda p=current_pos, m=moved, b=self.stage_movement_before_move:
-                    self.update_stage_labels(p, m, b)
-                )
-                if step < STEPS - 1:
-                    time.sleep(STEP_PAUSE_S)
-            self.after(
-                0,
-                lambda p=current_pos:
-                self.finish_stage_move(p)
-            )
     # -----------------------------------------------------------------------------
     # 7.7 MOVE STAGE DURING CALIBRATION
     # -----------------------------------------------------------------------------

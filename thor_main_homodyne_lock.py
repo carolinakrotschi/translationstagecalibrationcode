@@ -36,13 +36,7 @@ SAMPLE_INTERVAL_S = 0.005 #measurement interval
 DIRECTION_THRESHOLD = 0.004
 
 EXPECTED_FRINGE_AMPLITUDE_V = 0.010
-MIN_FRINGE_TO_NOISE_RATIO = 5.0
-DEFAULT_NOISE_AMPLITUDE_V = (
-    EXPECTED_FRINGE_AMPLITUDE_V / MIN_FRINGE_TO_NOISE_RATIO
-)
 DEFAULT_FRINGE_AMPLITUDE_V = EXPECTED_FRINGE_AMPLITUDE_V
-MIN_VALID_FRINGE_AMPLITUDE_V = 0.005 
-MAX_VALID_FRINGE_AMPLITUDE_V = 0.020
 FRINGE_RISE_FRACTION = 0.50
 FRINGE_REARM_FRACTION = 0.25
 DARK_LEVEL_FRACTION = 0.30
@@ -67,9 +61,6 @@ LOCK_TRIGGER_FRINGES = 1.0
 LOCK_CORRECTION_COOLDOWN_S = 0.30
 
 STAGE_CORRECTION_SIGN = -1
-STAGE_MOVE_TIMEOUT_S = 60.0
-STAGE_CHECK_TIMEOUT_S = 180.0
-STAGE_POLL_INTERVAL_S = 0.05
 PLOT_SAMPLE_WINDOW = 200 #numbers of samples that are actually plotted
 
 # -----------------------------------------------------------------------------
@@ -96,11 +87,8 @@ except ImportError:
 
 try:
     from thor_handler_stage import StageController
-except Exception as stage_import_error:
+except Exception:
     StageController = None
-    STAGE_IMPORT_ERROR = str(stage_import_error)
-else:
-    STAGE_IMPORT_ERROR = None
 
 # -----------------------------------------------------------------------------
 # 3. PHYSICAL CONSTANTS
@@ -486,7 +474,6 @@ class HomodyneQuadratureCounter:
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
         self.signed_fringes = 0
-        self.total_abs_fringes = 0
         self.s1_fringes_visible = False
         self.s2_fringes_visible = False
         self.current_direction = "none"
@@ -546,7 +533,6 @@ class HomodyneQuadratureCounter:
         self.previous_phase_rad = None
         self.unwrapped_phase_rad = 0.0
         self.signed_fringes = 0
-        self.total_abs_fringes = 0
         self.delta_phase_history = []
         self.current_direction = "none"
         self.center_s1 = self.offset_s1
@@ -627,9 +613,6 @@ class HomodyneQuadratureCounter:
             fringe_position = self.unwrapped_phase_rad / (2 * math.pi)
             new_signed_fringes = completed_signed_fringes(fringe_position)
             fringe_delta = new_signed_fringes - self.signed_fringes
-
-            if fringe_delta != 0:
-                self.total_abs_fringes += abs(fringe_delta)
 
             self.signed_fringes = new_signed_fringes
 
@@ -784,48 +767,6 @@ class HomodyneMonitor:
 def run_gui():
     gui = HomodyneGui()
     gui.run()
-# Start the text output loop
-def run_print_loop():
-    monitor = HomodyneMonitor()
-
-    try:
-        monitor.connect()
-        print("NI connected on Dev1/ai0 and Dev1/ai1.")
-        print("Calibrating photodiode offsets and amplitudes...")
-        print("Move the stage during calibration so the circle is sampled.")
-        monitor.calibrate()
-        print("Monitoring. Stop with Ctrl+C.")
-
-        while True:
-            sample = monitor.read()
-            distance_mm = monitor.counter.signed_distance_mm()
-
-            if distance_mm is None:
-                distance_text = "n/a"
-            else:
-                distance_text = f"{distance_mm:+.9f} mm"
-
-            print(
-                "phase="
-                f"{sample.unwrapped_phase_rad:+.4f} rad, "
-                "fringe_position="
-                f"{sample.fringe_position:+.4f}, "
-                "signed_fringes="
-                f"{sample.signed_fringes:+d}, "
-                "fringe_delta="
-                f"{sample.fringe_delta:+d}, "
-                "direction="
-                f"{sample.direction}, "
-                "distance="
-                f"{distance_text}"
-            )
-
-            time.sleep(SAMPLE_INTERVAL_S)
-
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        monitor.close()
 
 # -----------------------------------------------------------------------------
 # 4. APP CLASS (UI)
@@ -931,7 +872,6 @@ class HomodyneGui:
         self.stage_position_mm = 0.0
         self.lock_correction_active = False
         self.lock_last_correction_time = 0.0
-        self.lock_target_position_mm = None
 
         self.build_ui()
         self.update_comparison_labels() # renewing the text in the UI matching the initial update of the comparison labels with 0 values using e.g self.current_stage_movement_for_compare which is 0 at the beginning
@@ -1474,23 +1414,6 @@ class HomodyneGui:
             self.plot_canvas_circle.draw()
             self.plot_canvas_circle.get_tk_widget().pack(fill="both", expand=True, padx=8, pady=8)
 
-        # Create dummy labels that are not packed to avoid AttributeError in other methods
-        dummy_parent = ctk.CTkFrame(self.right_col)
-        self.label_phase = ctk.CTkLabel(dummy_parent)
-        self.label_s1_norm = ctk.CTkLabel(dummy_parent)
-        self.label_s2_norm = ctk.CTkLabel(dummy_parent)
-        self.label_unwrapped_phase = ctk.CTkLabel(dummy_parent)
-        self.label_fringe_position = ctk.CTkLabel(dummy_parent)
-        self.label_fringes = ctk.CTkLabel(dummy_parent)
-        self.label_direction = ctk.CTkLabel(dummy_parent)
-        self.label_distance = ctk.CTkLabel(dummy_parent)
-        self.label_lock_status = ctk.CTkLabel(dummy_parent)
-        self.label_lock_reference = ctk.CTkLabel(dummy_parent)
-        self.label_lock_drift = ctk.CTkLabel(dummy_parent)
-        self.label_lock_correction = ctk.CTkLabel(dummy_parent)
-        self.label_stage_status = ctk.CTkLabel(dummy_parent)
-        self.label_stage_position_lock = ctk.CTkLabel(dummy_parent)
-
         self.compare_frame = ctk.CTkFrame(self.left_col, fg_color="#EEEEEE")
         self.compare_frame.pack(fill="x", pady=4, padx=0)
 
@@ -1600,44 +1523,6 @@ class HomodyneGui:
             text_color=TEXT_COLOR
         ).pack(pady=(8, 8))
 
-    # Build a labeled value row
-    def make_value_label(self, parent, name, initial_value):
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=18, pady=5)
-
-        ctk.CTkLabel(
-            row,
-            text=f"{name}:",
-            width=180,
-            anchor="w",
-            font=("Arial", 12, "bold"),
-            text_color=TEXT_COLOR
-        ).pack(side="left")
-
-        label = ctk.CTkLabel(
-            row,
-            text=initial_value,
-            anchor="w",
-            font=("Arial", 12),
-            text_color=TEXT_COLOR
-        )
-        label.pack(side="left", fill="x", expand=True)
-        return label
-
-    # Build a wrapped explanatory label
-    def make_formula_label(self, parent, text):
-        label = ctk.CTkLabel(
-            parent,
-            text=text,
-            anchor="w",
-            justify="left",
-            wraplength=620,
-            font=("Arial", 11),
-            text_color=TEXT_COLOR
-        )
-        label.pack(fill="x", padx=18, pady=2)
-        return label
-
     # Format the fringe distance for display
     def fringe_distance_text(self):
         return (
@@ -1706,38 +1591,6 @@ class HomodyneGui:
             text_color=GREEN_COLOR
         )
 
-    # Update the stage step size
-    def apply_stage_step_size(self):
-        try:
-            step_mm = self.parse_entry_float(self.step_entry)
-        except ValueError:
-            self.status.configure(
-                text="Status: invalid stage step size",
-                text_color=RED_COLOR
-            )
-            return
-
-        step_mm = abs(step_mm)
-
-        if step_mm <= 0:
-            self.status.configure(
-                text="Status: stage step size must be positive",
-                text_color=RED_COLOR
-            )
-            return
-
-        self.stage_step_mm = step_mm
-        self.step_entry.delete(0, "end")
-        self.step_entry.insert(
-            0,
-            f"{self.stage_step_mm:.9f}"
-        )
-
-        self.status.configure(
-            text=f"Status: stage step set to {self.stage_step_mm:.9f} mm",
-            text_color=GREEN_COLOR
-        )
-
     # Clamp a correction to one stage step
     def limited_stage_correction_mm(self, correction_mm):
         if self.stage_step_mm <= 0:
@@ -1756,107 +1609,6 @@ class HomodyneGui:
 # Iterate over the sequence sample by sample
         for button in self.all_buttons:
             button.configure(state=state)
-
-    # Mark a stage command as finished and re-enable controls
-    def finish_stage_command_ui(self):
-        self.stage_command_active = False
-        self.set_buttons_enabled(True)
-
-    # Store a sample for deferred GUI display
-    def queue_sample_display(self, sample, distance_mm, force=False):
-# Copy the shared data while holding the lock
-        with self.sample_display_lock:
-            self.pending_sample = sample
-            self.pending_distance_mm = distance_mm
-
-            if self.sample_display_scheduled:
-                return
-
-            now = time.monotonic()
-            elapsed_s = now - self.last_sample_display_time
-            delay_s = 0.0 if force else max(
-                0.0,
-                UI_UPDATE_INTERVAL_S - elapsed_s
-            )
-            self.sample_display_scheduled = True
-
-        self.root.after(
-            int(delay_s * 1000),
-            self.flush_sample_display
-        )
-
-    # Send the queued sample to the GUI
-    def flush_sample_display(self):
-# Copy the shared data while holding the lock
-        with self.sample_display_lock:
-            sample = self.pending_sample
-            distance_mm = self.pending_distance_mm
-            self.pending_sample = None
-            self.pending_distance_mm = None
-            self.sample_display_scheduled = False
-
-        self.last_sample_display_time = time.monotonic()
-
-        if sample is not None:
-            self.update_sample_display(sample, distance_mm)
-
-    # Update the status label from a worker thread
-    def set_status_from_thread(self, text, color=TEXT_COLOR):
-        self.root.after(
-            0,
-            lambda:
-            self.status.configure(
-                text=text,
-                text_color=color
-            )
-        )
-
-    # Update the stage status label from a worker thread
-    def set_stage_status_from_thread(self, text, color=TEXT_COLOR):
-        self.root.after(
-            0,
-            lambda:
-            self.label_stage_status.configure(
-                text=text,
-                text_color=color
-            )
-        )
-
-    # Update the stage position label from a worker thread
-    def set_stage_position_from_thread(self, position_mm):
-        self.root.after(
-            0,
-            lambda p=position_mm:
-            self.label_stage_position.configure(
-                text=f"Stage Position: {p:.6f} mm"
-            ) if p is not None else None
-        )
-
-    # Wait until the stage stops moving or times out
-    def wait_for_stage_motion(self, timeout_s=STAGE_MOVE_TIMEOUT_S):
-        start_time = time.monotonic()
-        last_position_update_s = 0.0
-
-        while self.stage is not None and self.stage.is_moving:
-            if time.monotonic() - start_time > timeout_s:
-                self.stage.stop()
-                raise RuntimeError("stage move timeout")
-
-            position_mm = self.stage.current_position
-            now = time.monotonic()
-
-            if now - last_position_update_s >= STAGE_POLL_INTERVAL_S:
-                self.set_stage_position_from_thread(position_mm)
-                last_position_update_s = now
-
-            time.sleep(STAGE_POLL_INTERVAL_S)
-
-        if self.stage is None or not self.stage_connected:
-            return None
-
-        position_mm = self.stage.get_position()
-        self.set_stage_position_from_thread(position_mm)
-        return position_mm
 
     # Start or stop monitoring
     def toggle_monitoring(self):
@@ -3058,10 +2810,6 @@ class HomodyneGui:
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-            if hasattr(self, "label_stage_position_lock"):
-                self.label_stage_position_lock.configure(
-                    text=f"Stage Position: {pos:.6f} mm"
-                )
 
             self.label_stage_moved.configure(
                 text=f"Accumulated Movement: {accumulated_movement_mm:.6f} mm"
@@ -3095,8 +2843,6 @@ class HomodyneGui:
         with self.sample_display_lock:
             sample = self.latest_sample
             distance_mm = self.latest_distance_mm
-            s1_hist = list(self.raw_s1_history)
-            s2_hist = list(self.raw_s2_history)
 
             single_fringes = self.monitor.single_counter.accumulated_fringes
             single_distance = single_fringes * self.fringe_distance_mm
@@ -3135,70 +2881,26 @@ class HomodyneGui:
                 )
             )
 
-            self.label_phase.configure(
-                text=f"phase_rad = atan2(S2_norm, S1_norm) = {sample.phase_rad:+.5f} rad" if sample.valid else "phase_rad = invalid"
-            )
-            self.label_s1_norm.configure(
-                text=f"S1_norm = (raw_S1 - offset_S1) / scale_S1 = {sample.s1:+.6f}"
-            )
-            self.label_s2_norm.configure(
-                text=f"S2_norm = (raw_S2 - offset_S2) / scale_S2 = {sample.s2:+.6f}"
-            )
-            self.label_unwrapped_phase.configure(
-                text=f"unwrapped_phase_rad += delta_phase_rad = {sample.unwrapped_phase_rad:+.5f} rad"
-            )
-            self.label_fringe_position.configure(
-                text=f"fringe_position = unwrapped_phase_rad / (2*pi) = {sample.fringe_position:+.4f}"
-            )
-            self.label_fringes.configure(
-                text=f"signed_fringes = {sample.signed_fringes:+d}"
-            )
-
-            dir_text = "Still"
             dir_color = ORANGE_COLOR
             lissajous_dir_text = "STILL"
             if sample.direction == "forward":
-                dir_text = "Forward →"
                 dir_color = GREEN_COLOR
                 lissajous_dir_text = "FORWARD"
 # Handle the else branch
             elif sample.direction == "backward":
-                dir_text = "Backward ←"
                 dir_color = RED_COLOR
                 lissajous_dir_text = "BACKWARD"
 # Handle the else branch
             elif sample.direction == "signal_low":
-                dir_text = "Signal Low"
                 dir_color = RED_COLOR
 # Handle the else branch
             elif sample.direction == "fringes_not_visible":
-                dir_text = "Fringes Not Visible"
                 dir_color = RED_COLOR
 
-            self.label_direction.configure(
-                text=f"Direction: {dir_text}",
-                text_color=dir_color
-            )
             self.label_lissajous_direction.configure(
                 text=lissajous_dir_text,
                 text_color=dir_color
             )
-
-            if distance_mm is None:
-                self.label_distance.configure(
-                    text="distance_mm = fringe_position * fringe_distance_mm = n/a"
-                )
-            else:
-                self.label_distance.configure(
-                    text=f"distance_mm = fringe_position * fringe_distance_mm = {distance_mm:+.9f} mm"
-                )
-
-            if sample.fringe_delta != 0:
-                self.label_fringes.configure(text_color=GREEN_COLOR)
-                self.root.after(
-                    250,
-                    lambda: self.label_fringes.configure(text_color=TEXT_COLOR)
-                )
 
             self.update_lock_display(sample, distance_mm)
 
@@ -3422,42 +3124,10 @@ class HomodyneGui:
         # Reset the amplitude summary so no calibration value is shown
         self.label_single_thresholds.configure(text="Signal amplitudes: S1 = n/a, S2 = n/a")
 
-        # Reset the phase readout to an unavailable state
-        self.label_phase.configure(
-            text="phase_rad = atan2(S2_norm, S1_norm) = n/a"
-        )
-        # Reset the normalized S1 readout
-        self.label_s1_norm.configure(
-            text="S1_norm = (raw_S1 - offset_S1) / scale_S1 = n/a"
-        )
-        # Reset the normalized S2 readout
-        self.label_s2_norm.configure(
-            text="S2_norm = (raw_S2 - offset_S2) / scale_S2 = n/a"
-        )
-        # Reset the unwrapped phase readout
-        self.label_unwrapped_phase.configure(
-            text="unwrapped_phase_rad += delta_phase_rad = 0.00000 rad"
-        )
-        # Reset the fringe position readout
-        self.label_fringe_position.configure(
-            text="fringe_position = unwrapped_phase_rad / (2*pi) = 0.0000"
-        )
-        # Reset the signed fringe counter text
-        self.label_fringes.configure(
-            text="signed_fringes = 0"
-        )
-        # Reset the direction label to the neutral state
-        self.label_direction.configure(
-            text="Direction: Still"
-        )
         # Reset the Lissajous direction label to still
         self.label_lissajous_direction.configure(
             text="STILL",
             text_color=ORANGE_COLOR
-        )
-        # Reset the calculated distance display
-        self.label_distance.configure(
-            text="distance_mm = fringe_position * fringe_distance_mm = n/a"
         )
 
     # Start or stop the lock
@@ -3594,11 +3264,6 @@ class HomodyneGui:
                 text="Lock Status: active",
                 text_color=GREEN_COLOR
             )
-        # Update the main lock label to show that locking is enabled
-        self.label_lock_status.configure(
-            text="Lock: on",
-            text_color=GREEN_COLOR
-        )
         # Update the general status line to show the lock state
         self.status.configure(
             text="Status: locked",
@@ -3635,25 +3300,6 @@ class HomodyneGui:
             self.label_correction_since_locking.configure(
                 text="Correction since locking: n/a"
             )
-        # Reset the main lock label
-        self.label_lock_status.configure(
-            text="Lock: off",
-            text_color=TEXT_COLOR
-        )
-        # Reset the stored lock reference label
-        self.label_lock_reference.configure(
-            text="Reference: n/a"
-        )
-        # Reset the drift label
-        self.label_lock_drift.configure(
-            text="Drift: n/a"
-        )
-        # Reset the correction label
-        self.label_lock_correction.configure(
-            text="Correction to lock: n/a",
-            text_color=TEXT_COLOR
-        )
-
         # Update the status line only when requested
         if update_status:
             self.status.configure(
@@ -3671,27 +3317,6 @@ class HomodyneGui:
         drift_mm = distance_mm - self.lock_reference_distance_mm
         # Convert the drift into the corrective movement sign
         correction_mm = -STAGE_CORRECTION_SIGN * drift_mm
-
-        # Update the stored reference distance and fringe count
-        self.label_lock_reference.configure(
-            text=(
-                f"Reference: "
-                f"{self.lock_reference_distance_mm:+.9f} mm, "
-                f"{self.lock_reference_fringes:+d} fringes"
-            )
-        )
-        # Show the measured drift in millimeters
-        self.label_lock_drift.configure(
-            text=f"Drift: {drift_mm:+.9f} mm"
-        )
-        # Show the calculated correction direction and size
-        self.label_lock_correction.configure(
-            text=(
-                f"Correction to lock: {correction_mm:+.9f} mm "
-                f"(next step {correction_mm:+.9f} mm)"
-            ),
-            text_color=ORANGE_COLOR if abs(drift_mm) > 0 else GREEN_COLOR
-        )
 
         # Hand the values to the lock correction decision logic
         self.maybe_start_lock_correction(drift_mm, correction_mm, sample)
@@ -3717,10 +3342,6 @@ class HomodyneGui:
             return
 
         if not self.stage_connected or self.stage is None:
-            self.label_stage_status.configure(
-                text="Stage: not connected, cannot correct lock",
-                text_color=RED_COLOR
-            )
             return
 
         if sample is None or sample.signed_fringes == 0:
@@ -3750,10 +3371,6 @@ class HomodyneGui:
         # 2  Ignore samples without a usable movement direction
         if sample.direction not in ["forward", "backward"]:
             msg = f"{fringes_str} fringe but still, so no correction"
-            self.label_lock_status.configure(
-                text=f"Lock: {msg}",
-                text_color=ORANGE_COLOR
-            )
             if hasattr(self, 'label_lock_status_box'):
                 self.label_lock_status_box.configure(
                     text=f"Lock Status: {msg}",
@@ -3806,10 +3423,6 @@ class HomodyneGui:
         actual_correction_mm = target_position_mm - current_position_mm
 
         if abs(actual_correction_mm) < 1e-12:
-            self.label_lock_status.configure(
-                text="Lock: correction blocked by stage limit",
-                text_color=RED_COLOR
-            )
             if hasattr(self, 'label_lock_status_box'):
                 self.label_lock_status_box.configure(
                     text="Lock Status: blocked by limit",
@@ -3818,14 +3431,9 @@ class HomodyneGui:
             return
 
         self.lock_correction_active = True
-        self.lock_target_position_mm = target_position_mm
 
         if not self.stage.move_absolute(target_position_mm):
             self.lock_correction_active = False
-            self.label_lock_status.configure(
-                text="Lock: stage correction failed",
-                text_color=RED_COLOR
-            )
             if hasattr(self, 'label_lock_status_box'):
                 self.label_lock_status_box.configure(
                     text="Lock Status: correction failed",
@@ -3836,19 +3444,11 @@ class HomodyneGui:
         # Format the success message for the UI
         msg = f"{fringes_str} fringe corrected by {correction_step_mm:+.6f} mm"
 
-        self.label_lock_status.configure(
-            text=f"Lock: {msg}",
-            text_color=ORANGE_COLOR
-        )
         if hasattr(self, 'label_lock_status_box'):
             self.label_lock_status_box.configure(
                 text=f"Lock Status: {msg}",
                 text_color=ORANGE_COLOR
             )
-        self.label_stage_status.configure(
-            text="Stage: lock correction running",
-            text_color=ORANGE_COLOR
-        )
         self.label_stage_position.configure(
             text=f"Stage target: {target_position_mm:.6f} mm"
         )
@@ -3907,15 +3507,6 @@ class HomodyneGui:
             self.monitor.counter.reset()
             self.monitor.single_counter.reset()
             self.monitor.s2_visibility_counter.reset()
-
-        self.label_stage_status.configure(
-            text="Stage: connected",
-            text_color=GREEN_COLOR
-        )
-        self.label_lock_status.configure(
-            text="Lock: correction done",
-            text_color=GREEN_COLOR
-        )
 
     # Stop an active correction move
     def stop_stage_correction(self):
@@ -3991,10 +3582,6 @@ class HomodyneGui:
             self.pending_distance_mm = None
 
         self.reset_calculation_display()
-        self.label_lock_status.configure(text="Lock: off", text_color=TEXT_COLOR)
-        self.label_lock_reference.configure(text="Reference: n/a")
-        self.label_lock_drift.configure(text="Drift: n/a")
-        self.label_lock_correction.configure(text="Correction to lock: n/a", text_color=TEXT_COLOR)
 
         self.disable_lock(update_status=False)
         self.update_plot(reset=True)

@@ -49,13 +49,6 @@ if os.path.exists(dll_path): #if the path is there (which it should), windows is
 
 LASER_WAVELENGTH_NM = 780.0
 
-#this calculates the fringe distance in mm based on the known formula
-FRINGE_DISTANCE_MM = (
-    (LASER_WAVELENGTH_NM / 2) / 1_000_000
-    #1000000 is from nm to mm
-    #second division by 2 is because in a Michelson interferometer, the stage movement causes a change in path length that is twice the stage movement, so the fringe distance corresponds to half the wavelength of the laser light
-)
-
 SPEED_OF_LIGHT_MM_PS = 0.299792458
 DEFAULT_STAGE_SPEED_MM_S = 0.000600
 # -----------------------------------------------------------------------------
@@ -192,7 +185,6 @@ class InterferometerApp(ctk.CTk):
 
         #stores values for all the start positions
         self.stage_start_position = 0.0
-        self.stage_reference_position = 0.0
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
@@ -202,7 +194,6 @@ class InterferometerApp(ctk.CTk):
         self.returning_stage_after_calibration = False #return stage after calibration
         self.calibration_motion_started = False #prevents starting the calibration more than once
         self.calibration_stage_stop_done = False
-        self.calibration_button_cooldown_active = False
         #header
         ctk.CTkLabel(
             self.scroll, #to separate from the next argument
@@ -705,7 +696,6 @@ class InterferometerApp(ctk.CTk):
 
     def start_calibration_button_cooldown(self):
 
-        self.calibration_button_cooldown_active = True
         self.set_buttons_enabled(False)
 
         self.status.configure(
@@ -720,7 +710,6 @@ class InterferometerApp(ctk.CTk):
 
     def finish_calibration_button_cooldown(self):
 
-        self.calibration_button_cooldown_active = False
         self.set_buttons_enabled(True)
 
         if self.is_monitoring:
@@ -1406,14 +1395,9 @@ class InterferometerApp(ctk.CTk):
         self.current_stage_movement_for_compare = 0.0
 
         if pos is not None: #use provided position as new reference
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-        elif self.stage_connected: #if the stage is connected use actual hardware position as reference
-            self.stage_reference_position = self.stage.get_position()
-        else:
-            self.stage_reference_position = 0.0
 
         self.label_stage_moved.configure(
             text="Accumulated Movement: 0.000000 mm"

@@ -81,7 +81,6 @@ REQUIRED_BRIGHT_FRAMES = 3
 CALIBRATION_BUTTON_COOLDOWN_MS = 2000
 #mode for target, distance and center movements: "continuous" or "stepped"
 MODE = "continuous"
-CALIBRATION_SWEEP_DISTANCE_MM = 0.0006
 STAGE_STATUS_POLL_MS = 100
 
 # the program is built around one main class
@@ -204,7 +203,6 @@ class InterferometerApp(ctk.CTk):
 
         #stores values for all the start positions
         self.stage_start_position = 0.0
-        self.stage_reference_position = 0.0
         self.total_stage_movement = 0.0
         self.stage_movement_before_move = 0.0
         self.current_stage_movement_for_compare = 0.0
@@ -213,7 +211,6 @@ class InterferometerApp(ctk.CTk):
         self.center_stage_after_calibration_pending = False #stage has to center after calibration
         self.returning_stage_after_calibration = False #return stage after calibration
         self.calibration_motion_started = False #prevents starting the calibration more than once
-        self.calibration_button_cooldown_active = False
         self.stage_stop_requested = False
         #header
         ctk.CTkLabel(
@@ -718,7 +715,6 @@ class InterferometerApp(ctk.CTk):
 
     def start_calibration_button_cooldown(self):
 
-        self.calibration_button_cooldown_active = True
         self.set_buttons_enabled(False)
 
         self.status.configure(
@@ -733,7 +729,6 @@ class InterferometerApp(ctk.CTk):
 
     def finish_calibration_button_cooldown(self):
 
-        self.calibration_button_cooldown_active = False
         self.set_buttons_enabled(True)
 
         if self.is_monitoring:
@@ -1504,14 +1499,9 @@ class InterferometerApp(ctk.CTk):
         self.current_stage_movement_for_compare = 0.0
 
         if pos is not None: #use provided position as new reference
-            self.stage_reference_position = pos
             self.label_stage_position.configure(
                 text=f"Stage Position: {pos:.6f} mm"
             )
-        elif self.stage_connected: #if the stage is connected use actual hardware position as reference
-            self.stage_reference_position = self.stage.get_position()
-        else:
-            self.stage_reference_position = 0.0
 
         self.label_stage_moved.configure(
             text="Accumulated Movement: 0.000000 mm"
